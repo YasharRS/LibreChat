@@ -2,6 +2,7 @@ import { createContext, useContext } from 'react';
 import { createSSETransport } from '@librechat/chat';
 import { EndpointURLs } from 'librechat-data-provider';
 import type { Transport } from '~/hooks/Chat/contract';
+import { startWithLocalFiles } from '~/components/Filesystem/connection';
 import * as requests from '~/data-provider';
 
 /**
@@ -12,7 +13,9 @@ import * as requests from '~/data-provider';
 export const defaultChatTransport: Transport = {
   stream: ({ token }) => createSSETransport({ token }),
   start: ({ server, payload }, options) =>
-    requests.postGenerationRequest<unknown>(server, payload, options),
+    startWithLocalFiles(payload, (bound) =>
+      requests.postGenerationRequest<unknown>(server, bound, options),
+    ),
   abort: (params) => requests.abortStream(params),
   abortRun: ({ endpoint, abortKey }, { token }) =>
     fetch(`${EndpointURLs[endpoint]}/abort`, {

@@ -29,6 +29,8 @@ type FrameKeys = {
 
 function normalizeEventFrame(frame: ChatEventFrame): ChatEvent {
   switch (frame.event) {
+    case 'on_local_file_request':
+      return { type: 'local_file_request', data: frame.data };
     case 'title':
       return { type: 'title', data: frame };
     case 'attachment':

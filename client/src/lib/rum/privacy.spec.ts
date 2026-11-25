@@ -239,6 +239,7 @@ it.each(['request', 'response'])(
       'X_HDX_API_KEY',
       'token',
       'x-access-token',
+      'X-Local-Files-Token',
       'X_Refresh_Token',
       'x-amz-security-token',
       'signature',
@@ -280,6 +281,10 @@ it('checks header names before URL redaction and preserves ordinary attributes',
 
 it.each([
   '/api/auth/login',
+  '/api/local-files/sessions',
+  '/api/local-files/sessions/session-123/heartbeat',
+  '/api/local-files/sessions/session-123/results/request-123',
+  '/app/api/local-files/sessions/session-123',
   '/api/auth/register',
   '/api/auth/refresh',
   '/api/auth/resetPassword',

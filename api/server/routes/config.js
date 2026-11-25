@@ -1,6 +1,7 @@
 const express = require('express');
 const {
   isEnabled,
+  localFilesCapabilities,
   resolveEmailChangeSettings,
   checkEmailConfig,
   isLangfuseSettingsAvailable,
@@ -316,6 +317,7 @@ router.get('/', async function (req, res) {
       ...preLoginPayload,
       ...publicSharePayload,
       ...buildPostLoginPayload(appConfig),
+      ...localFilesCapabilities(appConfig),
       ...getConversationTitleCapabilities(appConfig?.interfaceConfig),
       conversationListLimits,
       sharedLinksSnapshotFilesEnabled: sharedLinksEnabled && isFileSnapshotEnabled(appConfig),

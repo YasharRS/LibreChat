@@ -1,10 +1,13 @@
 const { GraphEvents } = require('@librechat/agents');
 const { getMCPRequestContext } = require('~/server/services/MCPRequestContext');
+const filesystem = require('~/server/services/Filesystem');
 require('events').EventEmitter.defaultMaxListeners = 100;
 const { logger, MAX_AGENT_EVENT_ACTOR_ENCODING_LENGTH } = require('@librechat/data-schemas');
 const { getBufferString, HumanMessage } = require('@librechat/agents/langchain/messages');
 const {
   createRun,
+  markLocalFileApprovalRequests,
+  localFilesAdmission,
   isEnabled,
   settleOutputTruncation,
   checkAccess,
@@ -4401,7 +4404,7 @@ class AgentClient extends BaseClient {
       this.options.agent,
       ...(this.agentConfigs?.values() ?? []),
     ]);
-    const interruptPayload =
+    const interruptPayload = markLocalFileApprovalRequests(
       interrupt.payload?.type === 'tool_approval'
         ? markToolApprovalAllowAlways(
             markNativeCodeToolApprovalRequests(interrupt.payload, reachableAgents),
@@ -4424,7 +4427,8 @@ class AgentClient extends BaseClient {
               asksEveryUse: asksEveryUse(this.options.req),
             },
           )
-        : interrupt.payload;
+        : interrupt.payload,
+    );
     const codeExecutionBinding =
       interrupt.payload?.type === 'tool_approval' &&
       interrupt.payload.action_requests.some(
@@ -4594,9 +4598,11 @@ class AgentClient extends BaseClient {
       const runCanPause = canAgentGraphPause({
         policy: effectiveToolApprovalPolicy,
         agents: topLevelAgents,
-        hostGeneratedToolNames:
+        ...localFilesAdmission(
+          this.options.req,
+          admissionToolApprovalHooks,
           this.options.subagentTasks == null ? undefined : [Constants.CHECK_BACKGROUND_TASK],
-        resolvedProgrammaticHooks: admissionToolApprovalHooks,
+        ),
         pluginHookSource: getPluginHookSource(),
         askUserQuestionAdminDisabled,
         toolApprovalAllows: resolveRunToolApprovalAllows(
@@ -5007,6 +5013,14 @@ class AgentClient extends BaseClient {
           activityPhase?.handlers(offsetHandlers) ??
           (activityLabel ? createAssistantPhaseStampingHandlers(offsetHandlers) : offsetHandlers);
         const createRunPromise = createRun({
+          localFiles: filesystem.bind({
+            req: this.options.req,
+            streamId,
+            jobCreatedAt: this.jobCreatedAt,
+            transport: GenerationJobManager,
+            runId: this.responseMessageId,
+            config: appConfig,
+          }),
           sdkModelHost: this.options.req?.app?.locals?.sdkModelHost,
           sdkFiles: this.options.sdkFiles,
           grantExecution: grantExecution(getMCPRequestContext(this.options.req)),
@@ -5830,6 +5844,14 @@ class AgentClient extends BaseClient {
         activityPhase?.handlers(offsetHandlers) ??
         (activityLabel ? createAssistantPhaseStampingHandlers(offsetHandlers) : offsetHandlers);
       run = await createRun({
+        localFiles: filesystem.bind({
+          req: this.options.req,
+          streamId,
+          jobCreatedAt: this.jobCreatedAt,
+          transport: GenerationJobManager,
+          runId: this.responseMessageId,
+          config: appConfig,
+        }),
         sdkModelHost: this.options.req?.app?.locals?.sdkModelHost,
         sdkFiles: this.options.sdkFiles,
         sdkResumeState: { content: seedContent, steps: runSteps },

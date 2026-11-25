@@ -102,6 +102,7 @@ export const renderers: PartRenderers = extendPartRenderers({
       <>
         {prepared}
         <ToolApproval
+          name={toolCall.name}
           approval={toolCall.approval}
           toolCallId={toolCall.id ?? ''}
           args={toolCall.args}

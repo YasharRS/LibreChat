@@ -46,6 +46,12 @@ import {
   useLogoutUserMutation,
   useRefreshTokenMutation,
 } from '~/data-provider';
+import {
+  clearLocalFiles,
+  setLocalFilesOwner,
+  localFilesOwner,
+  listenLocalFilesLogout,
+} from '~/components/Filesystem/connection';
 import { resetChatFilterSessionAtom } from '~/components/Conversations/chatFilters';
 import { TAuthConfig, TUserContext, TAuthContext, TResError } from '~/common';
 import { resetFacetsAtom } from '~/components/Conversations/facets';
@@ -66,6 +72,7 @@ if (import.meta.hot) {
  * that reliably sees the transition. Both are cleared together so neither can be added to an exit
  * path the other was wired into. */
 const endSessionClientState = (): void => {
+  clearLocalFiles();
   getDefaultStore().set(resetChatFilterSessionAtom);
   getDefaultStore().set(resetMCPStateAtom);
   getDefaultStore().set(resetFacetsAtom);
@@ -123,6 +130,11 @@ const AuthContextProvider = ({
   const isExternalRedirectRef = useRef(false);
   const prerenderRefreshDeferredRef = useRef(false);
   const [user, setUser] = useRecoilState(store.user);
+  const fileOwner = localFilesOwner(user);
+  useEffect(listenLocalFilesLogout, []);
+  useEffect(() => {
+    setLocalFilesOwner(fileOwner);
+  }, [fileOwner]);
   const logoutRedirectRef = useRef<string | undefined>(undefined);
   const [token, setToken] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -142,6 +154,7 @@ const AuthContextProvider = ({
     () =>
       debounce((userContext: TUserContext) => {
         const { token, isAuthenticated, user, redirect } = userContext;
+        setLocalFilesOwner(isAuthenticated ? localFilesOwner(user) : undefined);
         setUser(user);
         setToken(token);
         setTokenHeader(token);
@@ -271,6 +284,7 @@ const AuthContextProvider = ({
 
   const logout = useCallback(
     (redirect?: string) => {
+      clearLocalFiles();
       clearPostLoginRedirect();
       clearTwoFactorSetupToken();
       if (redirect) {

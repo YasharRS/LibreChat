@@ -2375,3 +2375,9 @@ export function revokeAgentEventSubscriptionGrant(
     data: { expectedRevision },
   });
 }
+export {
+  createLocalFilesSession,
+  heartbeatLocalFiles,
+  completeLocalFiles,
+  disconnectLocalFiles,
+} from './filesystem-service';

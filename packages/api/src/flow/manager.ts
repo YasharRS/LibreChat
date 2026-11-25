@@ -8,6 +8,9 @@ import { math } from '~/utils/math';
 
 type GuardedMutationResult = 'updated' | 'stale' | 'missing';
 
+/** Cancels a redundant observer after another authorized completion channel settled it. */
+export const FLOW_MONITOR_SETTLED: unique symbol = Symbol('flowMonitorSettled');
+
 export interface FlowLease {
   generation: number;
   release: () => Promise<void>;
@@ -772,7 +775,8 @@ export class FlowStateManager<T = unknown> {
       // Immediate abort handler - responds instantly to abort signal
       const abortHandler = async () => {
         cleanup();
-        logger.warn(`[${flowKey}] Flow aborted (immediate)`);
+        if (signal?.reason !== FLOW_MONITOR_SETTLED)
+          logger.warn(`[${flowKey}] Flow aborted (immediate)`);
         const message = `${type} flow aborted`;
         if (ownsFlow) {
           try {
@@ -823,7 +827,7 @@ export class FlowStateManager<T = unknown> {
 
           if (signal?.aborted) {
             cleanup();
-            logger.warn(`[${flowKey}] Flow aborted`);
+            if (signal.reason !== FLOW_MONITOR_SETTLED) logger.warn(`[${flowKey}] Flow aborted`);
             const message = `${type} flow aborted`;
             if (ownsFlow) {
               await this.keyv.delete(flowKey);

@@ -16,6 +16,7 @@ import type {
   TTokenUsageEvent,
   TContextUsageEvent,
   TSteerUpdatedEvent,
+  LocalFilesCommand,
 } from 'librechat-data-provider';
 import type { GenerationProtocolVersion } from '../protocol';
 import type { RunEnd } from '../steer/types';
@@ -272,6 +273,8 @@ export interface ResumablePane {
 
 /** What the event handlers that render the stream expose to the run. */
 export interface ResumableEvents {
+  /** Host-owned execution; this package never holds a filesystem handle. */
+  localFileHandler?: (command: LocalFilesCommand) => void;
   stepHandler: (event: StepEvent, submission: EventSubmission) => void;
   finalHandler: (data: ChatFinalFrame, submission: EventSubmission) => void;
   createdHandler: (data: ChatCreatedFrame, submission: EventSubmission) => void;

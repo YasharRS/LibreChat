@@ -237,6 +237,8 @@ export function handleSync(ctx: StreamContext, data: ChatSyncFrame): void {
       }
       if (pendingEvent.event === 'title') {
         host.events.titleHandler(pendingEvent);
+      } else if (pendingEvent.event === 'on_local_file_request') {
+        host.events.localFileHandler?.(pendingEvent.data);
       } else if (pendingEvent.event === UsageEvents.ON_CONTEXT_USAGE) {
         host.usage.contextHandler(pendingEvent.data, resumeSubmission);
       } else if (pendingEvent.event === UsageEvents.ON_TOKEN_USAGE) {

@@ -12,6 +12,7 @@ import type { ResumableRun, ResumableEvents, ResumableUsage } from '@librechat/c
 import type { EventHandlerParams } from '@librechat/chat/react';
 import type { EventSubmission } from 'librechat-data-provider';
 import type { TResData, TFinalResData } from '~/common';
+import { receiveLocalFiles, adoptLocalFiles } from '~/components/Filesystem/connection';
 import { markStreamStartFailedMetadata } from '~/utils';
 import { reopenTermsOnRefusal } from '~/utils/terms';
 import useLocalize from '~/hooks/useLocalize';
@@ -117,7 +118,13 @@ export default function useResumableEvents({
         });
       },
       finalHandler: (data, finalSubmission) => finalHandler(data as TFinalResData, finalSubmission),
-      createdHandler,
+      localFileHandler: (command) => {
+        void receiveLocalFiles(command).catch(() => undefined);
+      },
+      createdHandler: (data, ...rest) => {
+        if (data.message.conversationId) adoptLocalFiles(data.message.conversationId);
+        createdHandler(data, ...rest);
+      },
       attachmentHandler,
       titleHandler,
       contentHandler,

@@ -1,4 +1,5 @@
 export enum QueryKeys {
+  localFiles = 'localFiles',
   slackApps = 'slackApps',
   slackWorkspaces = 'slackWorkspaces',
   agentChannelWorkspaceRoutes = 'agentChannelWorkspaceRoutes',
@@ -157,6 +158,8 @@ export const DynamicQueryKeys = {
 } as const;
 
 export enum MutationKeys {
+  localFilesSession = 'localFilesSession',
+  localFilesResult = 'localFilesResult',
   slackApps = 'slackApps',
   slackWorkspaces = 'slackWorkspaces',
   agentChannelWorkspaceRoutes = 'agentChannelWorkspaceRoutes',

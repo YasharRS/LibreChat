@@ -4,6 +4,7 @@ import {
   SteerEvents,
   ContentTypes,
   ApprovalEvents,
+  LOCAL_FILES_EVENT,
   ActivityLabelEvents,
   ReasoningLabelEvents,
 } from 'librechat-data-provider';
@@ -42,6 +43,7 @@ describe('normalizeFrame', () => {
   it('unwraps the named side channels to their payload', () => {
     const cases: Array<[string, string]> = [
       ['attachment', 'attachment'],
+      [LOCAL_FILES_EVENT, 'local_file_request'],
       [UsageEvents.ON_CONTEXT_USAGE, 'context_usage'],
       [UsageEvents.ON_TOKEN_USAGE, 'token_usage'],
       [ApprovalEvents.ON_PENDING_ACTION, 'pending_action'],

@@ -7,5 +7,5 @@ export default defineConfig({
   retries: 0,
   timeout: 60_000,
   reporter: 'line',
-  use: { headless: true, trace: 'off' },
+  use: { headless: true, trace: 'off', channel: process.env.E2E_CHROMIUM_CHANNEL },
 });

@@ -75,6 +75,7 @@ import type { LangfuseTraceContext } from '~/langfuse/identity';
 import type { ResolvedAlwaysApplySkill } from '~/agents/skills';
 import type { CodeExecutionContext } from '~/agents/execution';
 import type { SubagentCodeHostArgSpecs } from '~/code/targets';
+import type { LocalFilesBinding } from '~/filesystem/service';
 import type { SdkFileSession } from './remoteSdk/attachments';
 import type { MCPToolAlias } from '~/tools/classification';
 import type { ReviewedToolApprovals } from './hitl/modes';
@@ -144,6 +145,7 @@ import { createAgentToolApprovalSession, bindRunToolApprovalSession } from './hi
 import { resolveConfigHeaders, resolveModelHeaders, mergeHeaders } from '~/utils/headers';
 import { createSdkAgentRun, resolveSdkAgentBinding, SdkAgentRuntimeError } from './sdk';
 import { interruptToolHandler, supportsRunInterruption } from '~/agents/steering/tools';
+import { createLocalFilesTools, localFilesApprovalHook } from '~/filesystem/runtime';
 import { getLLMConfig as getAnthropicLLMConfig } from '~/endpoints/anthropic/llm';
 import { hasModelBoundContentProtection } from '../middleware/modelBoundContent';
 import { reportSubagentResolutionFailure } from '~/agents/failures/subagent';
@@ -154,6 +156,7 @@ import { getAzureCredentials, constructAzureURL } from '~/utils/azure';
 import { buildEffectiveToolApprovalPolicy } from '~/agents/hitl/allow';
 import { prepareQueuedCodeFileContext } from '~/files/code/queued';
 import { getBuiltInBaseURL } from '~/endpoints/openai/initialize';
+import { LocalFilesUnavailableError } from '~/filesystem/errors';
 import { getProviderConfig } from '~/endpoints/config/providers';
 import { createSafeUser, createSafeAgent } from '~/utils/env';
 import { shareDeferredDefinitions } from '~/agents/deferral';
@@ -2383,6 +2386,7 @@ export async function createRun({
   subagentUsageSink,
   subagentTasks,
   runFiles,
+  localFiles,
   steering,
   activityLabel,
   activityPhase,
@@ -2501,6 +2505,7 @@ export async function createRun({
   subagentTasks?: SubagentTaskConfig;
   /** Run-scoped file authorization and child context, supplied by the host. */
   runFiles?: RunFileSession;
+  localFiles?: LocalFilesBinding;
   /**
    * The run-scoped steer-drain hook (a `PostToolBatch` callback built via
    * `createSteerDrainHook`). Registered on the run's hook registry independent
@@ -2581,6 +2586,10 @@ export async function createRun({
     subagents: resolveSubagents(agent.subagents, appConfig?.endpoints?.agents?.capabilities),
   }));
   const resolvedRunId = runId ?? randomUUID();
+  const localRoot =
+    localFiles && hitlCapable && conversationId ? await localFiles.root(conversationId) : undefined;
+  if ((localFiles || requestBody?.localFilesSessionId) && !localRoot)
+    throw new LocalFilesUnavailableError();
   const registration = resolveSdkAgentBinding(
     agents,
     appConfig?.endpoints?.agents,
@@ -2951,6 +2960,26 @@ export async function createRun({
     if (runFilesActive && runFiles != null && (isSubagent || agent.subagents?.enabled === true)) {
       graphTools = [...(graphTools ?? []), ...createRunFileTools(runFiles, agent.id, signal)];
     }
+    if (
+      !isSubagent &&
+      agent.id === agents[0]?.id &&
+      localFiles &&
+      localRoot &&
+      hitlCapable &&
+      conversationId
+    ) {
+      const allowed = createLocalFilesTools(
+        localFiles,
+        conversationId,
+        signal,
+        localRoot.access === 'readwrite',
+      ).filter((candidate) =>
+        appConfig?.includedTools?.length
+          ? appConfig.includedTools.includes(candidate.name)
+          : !appConfig?.filteredTools?.includes(candidate.name),
+      );
+      graphTools = [...(graphTools ?? []), ...allowed];
+    }
     if (graphTools) {
       /**
        * Typed structurally — not as `AgentInputs['graphTools']` — because the
@@ -3147,6 +3176,14 @@ export async function createRun({
     mcpToolAliases,
     [
       { hook: agentApprovalSession.hook },
+      ...(localFiles
+        ? [
+            {
+              hook: localFilesApprovalHook,
+              toolNames: ['local_write', 'local_edit', 'local_mkdir', 'local_move'],
+            },
+          ]
+        : []),
       ...(resolvedToolApprovalHooks ??
         buildToolApprovalHooks({
           userId: user?.id,

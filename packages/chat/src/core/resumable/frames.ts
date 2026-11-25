@@ -196,6 +196,10 @@ export async function handleFrame(ctx: StreamContext, event: ChatEvent): Promise
       return;
     }
 
+    if (event.type === 'local_file_request') {
+      host.events.localFileHandler?.(event.data);
+      return;
+    }
     if (event.type === 'title') {
       host.events.titleHandler(event.data);
       return;

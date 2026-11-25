@@ -18,6 +18,7 @@ import type {
   TReasoningLabelAttemptEvent,
 } from './runs';
 import type { TMessage, TPayload, TConversation, TEditedContent } from '../types';
+import type { LocalFilesCommand } from '../filesystem';
 import type { TPromotedSteer } from './queuedTurns';
 import type { StreamContentData } from './content';
 import type { TAttachment } from '../schemas';
@@ -146,6 +147,7 @@ export type ChatStepFrame =
 
 /** Any `{ event, data }` frame: step events plus the named side channels. */
 export type ChatEventFrame =
+  | { event: 'on_local_file_request'; data: LocalFilesCommand }
   | ChatTitleFrame
   | ChatStepFrame
   | { event: 'attachment'; data: ChatAttachment }
@@ -212,6 +214,7 @@ export type ChatErrorData =
  * `UIMessageChunk`; the equivalents are noted per member where one exists.
  */
 export type ChatEvent =
+  | { type: 'local_file_request'; data: LocalFilesCommand }
   /** The connection opened. No AI SDK chunk; the SDK tracks this as `status: 'submitted'`. */
   | { type: 'open' }
   /** AI SDK: `start` (carries `messageId`). */

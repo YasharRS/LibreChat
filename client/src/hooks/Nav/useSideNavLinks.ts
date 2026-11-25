@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { MCPIcon, OpenAIMinimalIcon } from '@librechat/client';
 import {
   Bot,
+  FolderOpen,
   Brain,
   Bookmark,
   NotebookPen,
@@ -26,6 +27,7 @@ import {
   useGetAgentsConfig,
   useHasAccess,
 } from '~/hooks';
+import { useGetStartupConfig } from '~/data-provider/Endpoints';
 import { PromptsAccordion } from '~/components/Prompts';
 import { SkillsAccordion } from '~/components/Skills';
 import { lazyWithRecovery } from '~/lib/assets/lazy';
@@ -46,6 +48,7 @@ const SchedulePanel = lazyWithRecovery(
 );
 const Parameters = lazyWithRecovery(() => import('~/components/SidePanel/Parameters/Panel'));
 const MemoryPanel = lazyWithRecovery(() => import('~/components/SidePanel/Memories/MemoryPanel'));
+const FilesystemPanel = lazyWithRecovery(() => import('~/components/Filesystem/Panel'));
 
 export default function useSideNavLinks({
   hidePanel,
@@ -105,12 +108,23 @@ export default function useSideNavLinks({
     permission: Permissions.USE,
   });
   const { availableMCPServers } = useMCPServerManager();
+  const { data: startup } = useGetStartupConfig();
+  const filesEnabled = startup?.localFiles?.enabled === true;
 
   const { agentsConfig } = useGetAgentsConfig({ endpointsConfig });
   const { skillsEnabled } = useAgentCapabilities(agentsConfig?.capabilities);
 
   const Links = useMemo(() => {
     const links: NavLink[] = [];
+    if (filesEnabled && !isAssistantsEndpoint(endpointType ?? endpoint)) {
+      links.push({
+        title: 'com_fs_title',
+        label: '',
+        icon: FolderOpen,
+        id: 'local-files',
+        Component: FilesystemPanel,
+      });
+    }
 
     if (
       endpointsConfig?.[EModelEndpoint.agents] &&
@@ -247,6 +261,7 @@ export default function useSideNavLinks({
     return links;
   }, [
     endpoint,
+    filesEnabled,
     endpointsConfig,
     keyProvided,
     hasAccessToAgents,

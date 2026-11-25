@@ -460,6 +460,7 @@ export interface PendingActionContext {
 
 /** Request fields that decide which agent/graph + tool set a turn runs. */
 export interface AgentRequestFingerprintFields {
+  localFilesSessionId?: string;
   endpoint?: string | null;
   endpointType?: string | null;
   agent_id?: string | null;
@@ -501,6 +502,7 @@ function normalizeEphemeralAgent(ephemeral: Record<string, unknown> | null | und
  * works across reloads/replicas, and a crafted resume can't swap the tool set.
  */
 export const RESUME_CONTEXT_KEYS = [
+  'localFilesSessionId',
   'endpoint',
   'endpointType',
   'agent_id',
@@ -895,6 +897,9 @@ export function applyResumeModelParameters(
 
 export function computeAgentRequestFingerprint(fields: AgentRequestFingerprintFields): string {
   const canonical = JSON.stringify({
+    ...(fields.localFilesSessionId != null
+      ? { localFilesSessionId: fields.localFilesSessionId }
+      : {}),
     endpoint: fields.endpoint ?? null,
     endpointType: fields.endpointType ?? null,
     agent_id: fields.agent_id ?? null,

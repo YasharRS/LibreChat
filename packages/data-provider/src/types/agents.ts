@@ -17,6 +17,7 @@ import type {
 import type { TPromptGroupSource, NativePromptSelection, LangfusePromptSelection } from '../types';
 import type { TTokenUsageEvent, TContextUsageEvent, TPendingSteer } from './runs';
 import type { StatefulCodeEnvironment } from '../stateful-code';
+import type { LocalFilesReview } from '../filesystem';
 import type { SummaryContentPart } from './content';
 import type { TFile } from './files';
 import { StepTypes, ContentTypes, ToolCallTypes } from './runs';
@@ -687,6 +688,7 @@ export namespace Agents {
    * - `scope` defaults to `'once'`.
    */
   export interface ToolApprovalResolution {
+    localFiles?: LocalFilesReview;
     tool_call_id: string;
     decision: ToolApprovalDecisionType;
     editedArguments?: Record<string, unknown>;

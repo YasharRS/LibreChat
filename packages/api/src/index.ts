@@ -113,6 +113,7 @@ export * from './plugins';
 export * from './endpoints';
 /* Files */
 export * from './files';
+export * from './filesystem';
 /* Images */
 export * from './images';
 /* Storage */

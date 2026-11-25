@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ZodError } from 'zod';
 import type { TEndpointsConfig, TModelsConfig, TConfig } from './types';
+import type { LocalFilesConfig } from './filesystem';
 import {
   MAX_SUBAGENTS,
   MAX_SUBAGENTS_CEILING,
@@ -39,6 +40,7 @@ import {
   eReasoningResponseKeySchema,
 } from './schemas';
 import { runGrantResourceBindingSchema } from './types/runGrant';
+import { localFilesConfigSchema } from './filesystem';
 import { partialWithoutDefaults } from './zod';
 
 export const tenantIdSchema = z
@@ -4142,6 +4144,7 @@ export function supportsConversationTitleOwnership(config?: {
 }
 
 export type TStartupConfig = {
+  localFiles?: LocalFilesConfig & { version: 1; available: boolean };
   conversationTitleOwnershipVersion?: typeof CONVERSATION_TITLE_OWNERSHIP_VERSION;
   appTitle: string;
   socialLogins?: string[];
@@ -4978,6 +4981,7 @@ export const DEFAULT_CONFIG_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 export const DEFAULT_CONFIG_CACHE_MAX_ENTRIES = 1000;
 
 export const configSchema = z.object({
+  localFiles: localFilesConfigSchema.optional(),
   persistence: persistenceConfigSchema,
   version: z.string(),
   telemetry: telemetrySchema.optional(),
@@ -5991,6 +5995,7 @@ export enum ErrorTypes {
    * A conversation's selected attached workspace cannot be used as requested.
    */
   CODE_WORKSPACE_UNAVAILABLE = 'code_workspace_unavailable',
+  LOCAL_FILES_UNAVAILABLE = 'local_files_unavailable',
   /**
    * Invalid Agent Provider (excluded by Admin)
    */

@@ -18,6 +18,7 @@ export type ApprovalReviewCopy = {
 
 /** One paused call, drawn by the host's tool-approval card. */
 export type ApprovalRequestRenderProps = {
+  name?: string;
   approval: NonNullable<Agents.ToolCall['approval']>;
   toolCallId: string;
   args: Agents.ToolApprovalRequest['arguments'];
@@ -210,6 +211,7 @@ export const PendingToolApprovalPanel: MemoExoticComponent<
               )}
               {config != null ? (
                 renderRequest({
+                  name: request.name,
                   approval: {
                     actionId: pendingAction.actionId,
                     allowed_decisions: config.allowed_decisions,

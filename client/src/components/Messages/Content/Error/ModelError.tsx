@@ -56,6 +56,8 @@ export default function ModelError({ json, message }: ErrorRendererProps) {
       : localize('com_error_code_workspace_unavailable');
   }
 
+  if (errorKey === ErrorTypes.LOCAL_FILES_UNAVAILABLE) return localize('com_fs_unavailable');
+
   /**
    * Provider-neutral headline, matching the sentence the server persists as the failure's own
    * text. The provider's own message rides along in `message` when the deployment lets provider

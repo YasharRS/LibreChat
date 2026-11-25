@@ -21,6 +21,7 @@ const HEADER_SPAN_ATTRIBUTE = /^http\.(?:request|response)\.header\.(.+)$/i;
 const CREDENTIAL_HEADER = /authorization|cookie|apikey|token|signature/i;
 const BODY_SPAN_ATTRIBUTE = /^http\.(?:request|response)\.body$/i;
 const CREDENTIAL_ROUTES = [
+  /\/api\/local-files(?:\/|$)/i,
   /\/oauth\/(?:google|facebook|openid|github|discord|apple|saml)(?:\/callback)?\/?$/i,
   /\/api\/(?:auth|keys|api-keys)(?:\/|$)/i,
   /\/api\/user\/(?:verify|email)(?:\/|$)/i,

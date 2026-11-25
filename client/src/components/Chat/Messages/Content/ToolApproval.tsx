@@ -1,5 +1,6 @@
 import { useId, useContext, useEffect, useMemo } from 'react';
 import { Button, TextareaAutosize } from '@librechat/client';
+import { localFilesOperation, localFilesMutation } from 'librechat-data-provider';
 import { useComposerPresentsApproval, useOptionalChatSurface } from '@librechat/chat/react';
 import { SCHEDULE_APPROVAL_REASON, SUBSCRIPTION_APPROVAL_REASON } from 'librechat-data-provider';
 import {
@@ -21,10 +22,12 @@ import {
 } from '@librechat/chat';
 import type { Agents } from 'librechat-data-provider';
 import type { KeyboardEvent } from 'react';
+import type { LocalReviewProps } from '~/components/Filesystem/Review';
 import type { TranslationKeys } from '~/hooks';
 import { useApprovalContext, useResumeSubmit } from './ApprovalContext';
 import { cn, forceResize, insertTextAtCursor, logger } from '~/utils';
 import { NO_HOST_BINDINGS } from '~/hooks/Input/useComposerBindings';
+import LocalReview from '~/components/Filesystem/Review';
 import { ChatContext } from '~/Providers/ChatContext';
 import { useLocalize } from '~/hooks';
 
@@ -100,7 +103,7 @@ const descriptionKeys = new Map<string, TranslationKeys>([
  * only the record of the request: the panel owns the decisions and the submit,
  * and it overlays the tail of the thread where this card sits.
  */
-export default function ToolApproval({
+function StandardApproval({
   approval,
   toolCallId,
   args,
@@ -519,5 +522,14 @@ export default function ToolApproval({
         </div>
       )}
     </div>
+  );
+}
+
+export default function ToolApproval(props: LocalReviewProps) {
+  const operation = localFilesOperation(props.name ?? '');
+  return operation && localFilesMutation(operation) ? (
+    <LocalReview {...props} />
+  ) : (
+    <StandardApproval {...props} />
   );
 }

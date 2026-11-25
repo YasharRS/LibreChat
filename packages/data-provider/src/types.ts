@@ -145,6 +145,7 @@ export type TEphemeralAgent = {
 
 export type TPayload = Partial<TMessage> &
   Partial<TEndpointOption> & {
+    localFilesSessionId?: string;
     isContinued: boolean;
     isRegenerate?: boolean;
     /** Manual context compaction: summarize the branch up to `parentMessageId`

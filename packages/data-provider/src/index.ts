@@ -115,6 +115,8 @@ export * from './types/runGrant';
 export * from './types/dead';
 
 export * from './approval';
+export * from './filesystem';
+export { LocalFilesTransportError } from './filesystem-service';
 export * from './types/channels';
 export * from './types/responseReview';
 export * from './types/channelIdentity';

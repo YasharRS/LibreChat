@@ -24,6 +24,7 @@ export const errorRenderers: Record<string, ComponentType<ErrorRendererProps>> =
   [ErrorTypes.ENDPOINT_MODELS_NOT_LOADED]: ModelError,
   [ErrorTypes.UPSTREAM_MODEL_ERROR]: ModelError,
   [ErrorTypes.CODE_WORKSPACE_UNAVAILABLE]: ModelError,
+  [ErrorTypes.LOCAL_FILES_UNAVAILABLE]: ModelError,
   [ViolationTypes.ILLEGAL_MODEL_REQUEST]: ModelError,
   [ErrorTypes.REFUSAL]: ProviderError,
   [ErrorTypes.GOOGLE_ERROR]: ProviderError,
