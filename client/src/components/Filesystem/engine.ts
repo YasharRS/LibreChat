@@ -1,5 +1,7 @@
 import {
   LocalFilesTransportError,
+  LOCAL_FILES_VERSION,
+  localFilesFormat,
   localFilesInputSchema,
   serializeLocalFiles,
 } from 'librechat-data-provider';
@@ -83,12 +85,25 @@ async function fingerprint(file: File, max: number): Promise<string> {
 async function text(file: File, max: number): Promise<string> {
   if (file.size > max) return fail('TOO_LARGE');
   try {
-    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
+    const content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
       await file.arrayBuffer(),
     );
+    for (let index = 0; index < content.length; index++) {
+      const code = content.charCodeAt(index);
+      if (code < 9 || (code > 13 && code < 32)) return fail('UNSUPPORTED_TEXT');
+    }
+    return content;
   } catch {
     return fail('UNSUPPORTED_TEXT');
   }
+}
+async function binary(file: File, max: number): Promise<string> {
+  if (file.size > max) return fail('TOO_LARGE');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const chunks: string[] = [];
+  for (let index = 0; index < bytes.length; index += 16384)
+    chunks.push(String.fromCharCode(...bytes.subarray(index, index + 16384)));
+  return btoa(chunks.join(''));
 }
 export function replacements(
   content: string,
@@ -142,7 +157,7 @@ export class Filesystem {
     input: Extract<LocalFilesInput, { operation: 'list' | 'read' }>,
   ): Promise<LocalFilesResult> {
     return this.execute({
-      version: 1,
+      version: LOCAL_FILES_VERSION,
       id: crypto.randomUUID(),
       sessionId: crypto.randomUUID(),
       rootId: crypto.randomUUID(),
@@ -218,6 +233,8 @@ export class Filesystem {
       if (hash == null) return fail('NOT_FOUND');
       before.push({ path: input.path, hash }, { path: input.destination, hash: null });
     } else {
+      if (localFilesFormat(input.path) || /\.(doc|ppt)$/i.test(input.path))
+        return fail('UNSUPPORTED_TEXT');
       const hash = await this.hash(input.path, this.config.maxTextBytes);
       if (input.operation === 'edit' && hash == null) return fail('NOT_FOUND');
       if (hash != null)
@@ -282,16 +299,20 @@ export class Filesystem {
     if ((await this.folder.queryPermission({ mode: 'read' })) !== 'granted')
       return fail('PERMISSION_DENIED');
     if (input.operation === 'read') {
-      const content = await text(
-        await (await this.open(input.path)).getFile(),
-        this.config.maxTextBytes,
-      );
+      const file = await (await this.open(input.path)).getFile();
+      const format = localFilesFormat(input.path);
+      if (!format && (input.startPage != null || input.endPage != null))
+        return fail('INVALID_REQUEST');
+      if (/\.(doc|ppt)$/i.test(input.path)) return fail('UNSUPPORTED_FORMAT');
+      const value = format
+        ? { binary: { mime: format[1], data: await binary(file, this.config.maxFileBytes) } }
+        : { content: await text(file, this.config.maxTextBytes) };
       this.check(command.expiresAt, signal);
       return {
         ok: true,
         value: {
           path: input.path,
-          content,
+          ...value,
         },
       };
     }

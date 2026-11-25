@@ -7,7 +7,7 @@ const adapter = axios.defaults.adapter;
 const session: LocalFilesSession = {
   id: 'session',
   token: 'private-session-token',
-  version: 1,
+  version: 2,
   root: { id: 'root', name: 'workspace', access: 'read' },
   config: localFilesConfigSchema.parse({}),
 };
@@ -46,4 +46,16 @@ it('maps unapproved upstream messages to a safe stable code', async () => {
   await expect(
     completeLocalFiles(session, 'request', { ok: false, error: { code: 'CANCELLED' } }),
   ).rejects.toMatchObject({ code: 'UNAVAILABLE', message: 'UNAVAILABLE' });
+});
+it('sends binary results as raw bytes, retaining the session credential only in its header', async () => {
+  axios.defaults.adapter = async (config) => {
+    expect(config.headers['Content-Type']).toBe('application/octet-stream');
+    expect(config.headers['X-Local-Files-Token']).toBe(session.token);
+    expect(Buffer.from(config.data)).toEqual(Buffer.from([0, 1, 128, 255]));
+    return { data: undefined, status: 204, statusText: 'No Content', headers: {}, config };
+  };
+  await completeLocalFiles(session, 'request', {
+    ok: true,
+    value: { path: 'report.pdf', binary: { mime: 'application/pdf', data: 'AAGA/w==' } },
+  });
 });

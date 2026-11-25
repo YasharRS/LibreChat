@@ -119,6 +119,14 @@ for (const mode of ['proxy', 'direct'] as const) {
           credential: true,
         },
         {
+          path: '/api/local-files/sessions/session-123/results/binary-request-123',
+          method: 'POST',
+          contentType: 'application/octet-stream',
+          requestBody: `%PDF-1.7\n${secret}`,
+          responseBody: JSON.stringify({ token: secret }),
+          credential: true,
+        },
+        {
           path: '/api/auth/login',
           method: 'POST',
           requestBody: JSON.stringify({ email: 'user@example.test', password: secret }),
@@ -202,7 +210,7 @@ for (const mode of ['proxy', 'direct'] as const) {
             const url = `${base}${scenario.path}`;
             const response = await fetch(url, {
               method: scenario.method,
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': scenario.contentType ?? 'application/json' },
               body: scenario.requestBody,
             });
             received.push(await response.text());
@@ -210,7 +218,7 @@ for (const mode of ['proxy', 'direct'] as const) {
               await new Promise<string>((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
                 xhr.open(scenario.method, url);
-                xhr.setRequestHeader('Content-Type', 'application/json');
+                xhr.setRequestHeader('Content-Type', scenario.contentType ?? 'application/json');
                 xhr.onload = () => resolve(xhr.responseText);
                 xhr.onerror = () => reject(new Error('Synthetic credential request failed'));
                 xhr.send(scenario.requestBody);

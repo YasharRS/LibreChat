@@ -10,7 +10,7 @@ const sessionId = '00000000-0000-4000-8000-000000000001';
 const rootId = '00000000-0000-4000-8000-000000000002';
 function command(input: LocalFilesInput): LocalFilesCommand {
   return {
-    version: 1,
+    version: 2,
     id: crypto.randomUUID(),
     sessionId,
     rootId,
@@ -61,6 +61,28 @@ it('reads without a write grant and leaves the disk unchanged', async () => {
     value: { path: 'note.txt', content: 'original' },
   });
   expect(folder.files.get('note.txt')?.writes).toBe(0);
+});
+it.each(['report.pdf', 'letter.docx', 'sheet.xlsx', 'slides.pptx', 'photo.png'])(
+  'reads %s as bounded binary without changing the file',
+  async (path) => {
+    const data = new Uint8Array([0, 1, 128, 255]);
+    const file = new DiskFile(path, data);
+    folder.files.set(path, file);
+    const result = await engine.inspect({ operation: 'read', path });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.binary?.data).toBe('AAGA/w==');
+    expect(file.writes).toBe(0);
+  },
+);
+it('never writes UTF-8 data over a binary document or misreads control bytes as text', async () => {
+  await expect(
+    engine.preview({ operation: 'write', path: 'report.pdf', content: 'replacement' }, sessionId),
+  ).rejects.toMatchObject({ code: 'UNSUPPORTED_TEXT' });
+  folder.files.set('unknown.dat', new DiskFile('unknown.dat', new Uint8Array([0, 1, 2])));
+  expect(await engine.inspect({ operation: 'read', path: 'unknown.dat' })).toEqual({
+    ok: false,
+    error: { code: 'UNSUPPORTED_TEXT' },
+  });
 });
 it('never changes a file without a locally approved receipt', async () => {
   await engine.enable();

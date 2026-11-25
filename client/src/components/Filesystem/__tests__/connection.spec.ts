@@ -42,7 +42,7 @@ beforeEach(() => {
       put: async () => undefined,
     }),
   };
-  created = { id: crypto.randomUUID(), token: 'memory-only-token', config, root, version: 1 };
+  created = { id: crypto.randomUUID(), token: 'memory-only-token', config, root, version: 2 };
   requests = [];
   axios.defaults.adapter = async (config) => {
     requests.push(`${config.method} ${config.url}`);

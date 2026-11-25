@@ -1,14 +1,38 @@
 const { FakeChatModel } = require('@librechat/agents');
 
 module.exports = (run, context) => {
-  const write = JSON.stringify(context.messages ?? []).includes('LOCAL_WRITE');
+  const prompt = JSON.stringify(context.messages ?? []);
+  const write = prompt.includes('LOCAL_WRITE');
+  const pdf = prompt.includes('LOCAL_PDF');
+  const word = prompt.includes('LOCAL_WORD');
+  const image = prompt.includes('LOCAL_IMAGE');
+  const path = pdf ? 'report.pdf' : word ? 'letter.docx' : image ? 'photo.png' : 'note.txt';
   const name = write ? 'local_write' : 'local_read';
   const id = write ? 'local-write-call' : 'local-read-call';
   class Model extends FakeChatModel {
     async *_streamResponseChunks(restored, options, manager) {
       if (restored.some((message) => message.tool_call_id === id)) {
+        const result = restored.find((message) => message.tool_call_id === id);
+        const content = JSON.stringify(result.content);
+        const verified = pdf
+          ? content.includes('PDF extraction verified')
+          : word
+            ? content.includes('This is a sample DOCX file.')
+            : image
+              ? restored.some(
+                  (message) =>
+                    Array.isArray(message.content) &&
+                    message.content.some(
+                      (block) =>
+                        block.type === 'image_url' &&
+                        block.image_url.url.startsWith('data:image/jpeg;base64,'),
+                    ),
+                )
+              : true;
         yield* new FakeChatModel({
-          responses: ['Local file operation complete.'],
+          responses: [
+            verified ? 'Local file operation complete.' : 'Extraction verification failed.',
+          ],
         })._streamResponseChunks(restored, options, manager);
         return;
       }
@@ -22,7 +46,7 @@ module.exports = (run, context) => {
         type: 'tool_call',
         name,
         id,
-        args: { path: 'note.txt', ...(write ? { content: 'reviewed by the owner' } : {}) },
+        args: { path, ...(write ? { content: 'reviewed by the owner' } : {}) },
       },
     ],
   });

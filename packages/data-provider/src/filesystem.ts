@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const LOCAL_FILES_VERSION = 1 as const;
+export const LOCAL_FILES_VERSION = 2 as const;
 export const LOCAL_FILES_EVENT = 'on_local_file_request' as const;
 export const LOCAL_FILES_HEADER = 'X-Local-Files-Token';
 
@@ -19,12 +19,58 @@ export const localFilesConfigSchema = z
       .min(1)
       .max(256 * 1024 * 1024)
       .default(16 * 1024 * 1024),
+    maxFileBytes: z
+      .number()
+      .int()
+      .min(1)
+      .max(15 * 1024 * 1024)
+      .default(15 * 1024 * 1024),
+    // Leave space below the agents SDK's 400,000-character tool-content ceiling.
+    maxOutputBytes: z.number().int().min(16384).max(350000).default(350000),
+    maxPages: z.number().int().min(1).max(500).default(100),
+    maxImages: z.number().int().min(1).max(4).default(4),
+    maxImageBytes: z
+      .number()
+      .int()
+      .min(16384)
+      .max(1024 * 1024)
+      .default(512 * 1024),
+    maxImagePixels: z.number().int().min(1).max(64000000).default(25000000),
+    imageDimension: z.number().int().min(256).max(2048).default(1600),
+    maxReaders: z.number().int().min(1).max(4).default(2),
+    extractionTimeoutMs: z.number().int().min(1000).max(120000).default(30000),
     pageSize: z.number().int().min(1).max(1000).default(200),
     requestTimeoutMs: z.number().int().min(1000).max(300000).default(60000),
     sessionTtlMs: z.number().int().min(15000).max(300000).default(60000),
   })
   .strict();
 export type LocalFilesConfig = z.infer<typeof localFilesConfigSchema>;
+
+/** An allowlist; browser MIME hints and renamed extensions cannot authorize active content. */
+const formats = {
+  pdf: ['pdf', 'application/pdf'],
+  docx: ['word', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  xlsx: ['sheet', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  xls: ['sheet', 'application/vnd.ms-excel'],
+  ods: ['sheet', 'application/vnd.oasis.opendocument.spreadsheet'],
+  pptx: ['slides', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+  odt: ['document', 'application/vnd.oasis.opendocument.text'],
+  odp: ['document', 'application/vnd.oasis.opendocument.presentation'],
+  jpg: ['image', 'image/jpeg'],
+  jpeg: ['image', 'image/jpeg'],
+  png: ['image', 'image/png'],
+  webp: ['image', 'image/webp'],
+  gif: ['image', 'image/gif'],
+  tif: ['image', 'image/tiff'],
+  tiff: ['image', 'image/tiff'],
+  avif: ['image', 'image/avif'],
+} as const;
+export function localFilesFormat(path: string) {
+  const extension = path.split('/').pop()?.split('.').pop()?.toLowerCase() ?? '';
+  return Object.prototype.hasOwnProperty.call(formats, extension)
+    ? formats[extension as keyof typeof formats]
+    : undefined;
+}
 
 export const localFilesRootSchema = z
   .object({
@@ -56,7 +102,14 @@ export const localFilesInputSchema = z.discriminatedUnion('operation', [
       cursor: z.number().int().nonnegative().default(0),
     })
     .strict(),
-  z.object({ operation: z.literal('read'), path: file }).strict(),
+  z
+    .object({
+      operation: z.literal('read'),
+      path: file,
+      startPage: z.number().int().positive().optional(),
+      endPage: z.number().int().positive().optional(),
+    })
+    .strict(),
   z.object({ operation: z.literal('write'), path: file, content: z.string() }).strict(),
   z
     .object({
@@ -118,6 +171,10 @@ export const LOCAL_FILES_ERRORS = [
   'PERMISSION_DENIED',
   'NOT_FOUND',
   'UNSUPPORTED_TEXT',
+  'UNSUPPORTED_FORMAT',
+  'UNREADABLE_FILE',
+  'PASSWORD_REQUIRED',
+  'PROCESSOR_BUSY',
   'TOO_LARGE',
   'CONFLICT',
   'REVIEW_REQUIRED',
@@ -136,6 +193,19 @@ export const localFilesResultSchema = z.discriminatedUnion('ok', [
         .object({
           path: z.string(),
           content: z.string().optional(),
+          binary: z.object({ mime: z.string(), data: z.string() }).strict().optional(),
+          images: z
+            .array(
+              z
+                .object({
+                  mime: z.literal('image/jpeg'),
+                  data: z.string(),
+                  page: z.number().int().positive().optional(),
+                })
+                .strict(),
+            )
+            .max(4)
+            .optional(),
           entries: z
             .array(z.object({ name: z.string(), kind: z.enum(['file', 'directory']) }).strict())
             .optional(),

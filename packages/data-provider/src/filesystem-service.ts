@@ -43,6 +43,22 @@ export async function completeLocalFiles(
   id: string,
   result: LocalFilesResult,
 ): Promise<void> {
+  const binary = result.ok ? result.value.binary : undefined;
+  if (binary) {
+    await send(() =>
+      axios.post(
+        `${url(session.id)}/results/${encodeURIComponent(id)}`,
+        Uint8Array.from(atob(binary.data), (character) => character.charCodeAt(0)),
+        {
+          headers: {
+            ...options(session.token).headers,
+            'Content-Type': 'application/octet-stream',
+          },
+        },
+      ),
+    );
+    return;
+  }
   await send(() =>
     axios.post(
       `${url(session.id)}/results/${encodeURIComponent(id)}`,

@@ -9,6 +9,7 @@ import {
   GraphEvents,
   HookRegistry,
   ProviderTextProtectionError,
+  calculateMaxToolResultChars,
 } from '@librechat/agents';
 import {
   hasActivePiiPatterns,
@@ -2973,6 +2974,11 @@ export async function createRun({
         conversationId,
         signal,
         localRoot.access === 'readwrite',
+        Math.max(
+          1,
+          (agent.maxToolResultChars ?? calculateMaxToolResultChars(effectiveMaxContextTokens)) -
+            4096,
+        ),
       ).filter((candidate) =>
         appConfig?.includedTools?.length
           ? appConfig.includedTools.includes(candidate.name)

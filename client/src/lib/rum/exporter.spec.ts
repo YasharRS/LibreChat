@@ -75,6 +75,7 @@ it.each([
   ['/api/auth/refresh', true],
   ['/librechat/api/mcp/oauth/tokens/flow-123', true],
   ['/api/keys', true],
+  ['/api/local-files/sessions/session/results/request', true],
   ['/api/messages', false],
 ])('applies the body policy to every attribute bag for %s', (path, sensitive) => {
   const context = { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), traceFlags: 1 };

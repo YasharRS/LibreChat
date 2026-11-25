@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { raw } from 'express';
 import { logger } from '@librechat/data-schemas';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
@@ -8,6 +9,7 @@ import {
   localFilesConfigSchema,
   localFilesRootSchema,
   localFilesResultSchema,
+  localFilesFormat,
 } from 'librechat-data-provider';
 import type {
   Agents,
@@ -16,10 +18,12 @@ import type {
   LocalFilesConfig,
   LocalFilesCommand,
   LocalFilesResult,
+  LocalFilesInput,
 } from 'librechat-data-provider';
 import type { AppConfig } from '@librechat/data-schemas';
 import type { Request, Response } from 'express';
 import type { Keyv } from 'keyv';
+import type { LocalFilesReader } from './reader';
 import type { FlowLease } from '~/flow/manager';
 import type { ServerRequest } from '~/types';
 import { FlowStateManager, FLOW_MONITOR_SETTLED } from '~/flow/manager';
@@ -40,6 +44,8 @@ interface Pending {
   sessionId: string;
   createdAt: number;
   expiresAt: number;
+  read?: Extract<LocalFilesInput, { operation: 'read' }>;
+  maximum: number;
 }
 const principalSchema = z.object({ id: z.string().min(1), tenantId: z.string().optional() });
 const registration = z
@@ -77,7 +83,13 @@ export function localFilesCapabilities(config: AppConfig | undefined): {
 }
 
 /** The store and request transport are supplied by the host; this service never opens host files. */
-export function createLocalFilesService({ store }: { store: Keyv }): LocalFilesService {
+export function createLocalFilesService({
+  store,
+  read,
+}: {
+  store: Keyv;
+  read?: LocalFilesReader;
+}): LocalFilesService {
   // The protocol bounds a request to five minutes. Effective deployments may set a shorter deadline.
   const flows = new FlowStateManager<LocalFilesResult>(store, { ttl: 300000 });
   const waiters = new Map<string, (result: LocalFilesResult) => void>();
@@ -141,7 +153,13 @@ export function createLocalFilesService({ store }: { store: Keyv }): LocalFilesS
     if (!flow) throw new Error('Local file request was not persisted');
     await store.set(
       pendingKey(id),
-      { sessionId, createdAt: flow.createdAt, expiresAt } satisfies Pending,
+      {
+        sessionId,
+        createdAt: flow.createdAt,
+        expiresAt,
+        maximum: config.maxOutputBytes,
+        ...(command.input.operation === 'read' ? { read: command.input } : {}),
+      } satisfies Pending,
       config.requestTimeoutMs,
     );
     const timeout = AbortSignal.timeout(config.requestTimeoutMs);
@@ -264,28 +282,71 @@ export function createLocalFilesService({ store }: { store: Keyv }): LocalFilesS
           return;
         }
         const pending = await store.get<Pending>(pendingKey(requestId));
-        const parsed = localFilesResultSchema.safeParse(req.body);
         if (!pending || pending.sessionId !== session.id || pending.expiresAt <= Date.now()) {
           res.status(409).json({ code: 'REVIEW_EXPIRED' });
           return;
         }
-        if (
-          !parsed.success ||
-          (parsed.data.ok &&
-            (Buffer.byteLength(parsed.data.value.content ?? '', 'utf8') > settings.maxTextBytes ||
-              (parsed.data.value.entries?.length ?? 0) > settings.pageSize))
-        ) {
-          res.status(400).json({ code: 'INVALID_REQUEST' });
-          return;
+        let result: LocalFilesResult;
+        if (req.headers?.['content-type']?.split(';')[0] === 'application/octet-stream') {
+          if (!read || !pending.read || !localFilesFormat(pending.read.path)) {
+            res.status(400).json({ code: 'INVALID_REQUEST' });
+            return;
+          }
+          // Uploads and extraction must not hold off heartbeats or disconnection.
+          await lease.release();
+          lease = null;
+          const error: unknown = await new Promise((resolve) => {
+            raw({ type: 'application/octet-stream', limit: settings.maxFileBytes })(
+              req,
+              res,
+              (failure?: unknown) => resolve(failure),
+            );
+          });
+          if (error || !Buffer.isBuffer(req.body)) {
+            res.status(413).json({ code: 'TOO_LARGE' });
+            return;
+          }
+          result = await read({
+            input: pending.read,
+            data: req.body,
+            config: {
+              ...settings,
+              maxOutputBytes: Math.min(settings.maxOutputBytes, pending.maximum),
+            },
+            signal: AbortSignal.timeout(Math.max(1, pending.expiresAt - Date.now())),
+          });
+          lease = await flows.acquireLease(`local-files-session:${session.id}`, {
+            leaseMs: settings.sessionTtlMs,
+            waitMs: settings.requestTimeoutMs,
+          });
+          if (!lease || !(await authorized(req))) {
+            res.status(404).json({ code: 'UNAVAILABLE' });
+            return;
+          }
+        } else {
+          const parsed = localFilesResultSchema.safeParse(req.body);
+          if (
+            !parsed.success ||
+            (parsed.data.ok &&
+              (parsed.data.value.binary != null ||
+                parsed.data.value.images != null ||
+                Buffer.byteLength(parsed.data.value.content ?? '', 'utf8') >
+                  settings.maxTextBytes ||
+                (parsed.data.value.entries?.length ?? 0) > settings.pageSize))
+          ) {
+            res.status(400).json({ code: 'INVALID_REQUEST' });
+            return;
+          }
+          result = parsed.data;
         }
         const completed = await flows.completeFlowIfCurrent(
           requestId,
           'local_files',
           pending.createdAt,
           requestId,
-          parsed.data,
+          result,
         );
-        if (completed === 'updated') waiters.get(requestId)?.(parsed.data);
+        if (completed === 'updated') waiters.get(requestId)?.(result);
         res.sendStatus(204);
       } catch (error) {
         logger.error('[Local files] Request failed', getSafeErrorMetadata(error));
@@ -323,12 +384,25 @@ export function createLocalFilesService({ store }: { store: Keyv }): LocalFilesS
       config: settings,
       decisions: req.body.decisions ?? [],
       root: async (conversationId: string) => (await get(id, principal, conversationId))?.root,
-      invoke: (input: Parameters<typeof invoke>[0]['command'], signal: AbortSignal) =>
+      invoke: (
+        input: Parameters<typeof invoke>[0]['command'],
+        signal: AbortSignal,
+        maximum?: number,
+      ) =>
         invoke({
           principal,
           sessionId: id,
           command: { ...input, runId },
-          config: settings,
+          config:
+            maximum == null
+              ? settings
+              : {
+                  ...settings,
+                  maxOutputBytes: Math.max(
+                    1,
+                    Math.min(settings.maxOutputBytes, Math.floor(maximum)),
+                  ),
+                },
           signal,
           send: (command) =>
             transport.emitChunk(
@@ -355,7 +429,7 @@ export interface LocalFilesBinding {
   config: LocalFilesConfig;
   decisions: Agents.ToolApprovalResolution[];
   root: (conversationId: string) => Promise<LocalFilesRoot | undefined>;
-  invoke: (command: Command, signal: AbortSignal) => Promise<LocalFilesResult>;
+  invoke: (command: Command, signal: AbortSignal, maximum?: number) => Promise<LocalFilesResult>;
 }
 interface BindingOptions {
   req: ServerRequest & { _isScheduledFire?: boolean };

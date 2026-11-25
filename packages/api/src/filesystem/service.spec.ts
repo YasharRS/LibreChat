@@ -1,5 +1,7 @@
 import { Keyv } from 'keyv';
+import path from 'node:path';
 import express from 'express';
+import supertest from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { LOCAL_FILES_HEADER, localFilesConfigSchema } from 'librechat-data-provider';
 import type { LocalFilesCommand, LocalFilesSession } from 'librechat-data-provider';
@@ -7,6 +9,8 @@ import type { AppConfig } from '@librechat/data-schemas';
 import type { Request, Response } from 'express';
 import type { ServerRequest } from '~/types';
 import { createLocalFilesService, localFilesCapabilities } from './service';
+import { createLocalFilesReader } from './reader';
+import { samplePdf } from './samples.helper';
 
 const settings = localFilesConfigSchema.parse({ enabled: true, requestTimeoutMs: 10000 });
 const config = {
@@ -48,15 +52,68 @@ function request(
     get: (header: string) => (header === LOCAL_FILES_HEADER ? session?.token : undefined),
   }) as Request;
 }
-async function setup() {
+async function setup(read?: ReturnType<typeof createLocalFilesReader>) {
   const store = new Keyv();
-  const service = createLocalFilesService({ store });
+  const service = createLocalFilesService({ store, read });
   const handlers = service.router();
   const created = response();
-  await handlers.create(request(undefined, { version: 1, conversationId, root }), created.res);
+  await handlers.create(request(undefined, { version: 2, conversationId, root }), created.res);
   expect(created.state.status).toBe(201);
   return { store, service, handlers, session: created.state.body as LocalFilesSession };
 }
+it('authenticates raw uploads, extracts only a pending read, and keeps source bytes out of flow state', async () => {
+  const read = createLocalFilesReader(
+    path.join(__dirname, '../../dist/filesystem/reader-worker.cjs'),
+  );
+  const { service, handlers, session } = await setup(read);
+  const app = express();
+  app.use((req, _res, next) => {
+    Object.assign(req, { user: principal, config });
+    next();
+  });
+  app.post('/sessions/:id/results/:requestId', handlers.result);
+  let requestId = '';
+  const data = samplePdf(['Private PDF text']);
+  const result = await service.invoke({
+    principal,
+    sessionId: session.id,
+    config: settings,
+    signal: new AbortController().signal,
+    command: {
+      runId: 'run',
+      toolCallId: 'pdf',
+      conversationId,
+      input: { operation: 'read', path: 'report.pdf' },
+    },
+    send: async (command) => {
+      requestId = command.id;
+      const url = `/sessions/${session.id}/results/${command.id}`;
+      await supertest(app)
+        .post(url)
+        .set(LOCAL_FILES_HEADER, 'wrong-token')
+        .type('application/octet-stream')
+        .send(data)
+        .expect(404);
+      await supertest(app)
+        .post(url)
+        .set(LOCAL_FILES_HEADER, session.token)
+        .type('application/octet-stream')
+        .send(data)
+        .expect(204);
+    },
+  });
+  expect(result).toEqual({
+    ok: true,
+    value: { path: 'report.pdf', content: '[Page 1]\nPrivate PDF text' },
+  });
+  expect(JSON.stringify(result)).not.toContain('%PDF');
+  await supertest(app)
+    .post(`/sessions/${session.id}/results/${requestId}`)
+    .set(LOCAL_FILES_HEADER, session.token)
+    .type('application/octet-stream')
+    .send(data)
+    .expect(409);
+}, 30000);
 it('does not advertise or activate the feature by default or without approval support', () => {
   expect(localFilesCapabilities(undefined)).toEqual({});
   expect(localFilesCapabilities({ ...config, endpoints: {} }).localFiles?.available).toBe(false);

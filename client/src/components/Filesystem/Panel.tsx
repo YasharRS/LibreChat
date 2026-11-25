@@ -72,10 +72,11 @@ export default function Panel() {
     queryFn: async () => {
       const result = await entry!.engine.inspect({ operation: 'read', path: selected });
       if (!result.ok) throw new FilesystemError(result.error.code);
-      return result.value.content ?? '';
+      return result.value;
     },
     retry: false,
     refetchOnWindowFocus: false,
+    cacheTime: 0,
   });
   const choose = async () => {
     try {
@@ -199,12 +200,32 @@ export default function Panel() {
                   {preview.isError && (
                     <p role="alert">{localize(errorKeys[filesystemError(preview.error)])}</p>
                   )}
-                  {!preview.isLoading && !preview.isError && (
+                  {preview.data?.binary && (
+                    <>
+                      {[
+                        'image/jpeg',
+                        'image/png',
+                        'image/webp',
+                        'image/gif',
+                        'image/avif',
+                      ].includes(preview.data.binary.mime) && (
+                        <img
+                          src={`data:${preview.data.binary.mime};base64,${preview.data.binary.data}`}
+                          alt={localize('com_fs_preview')}
+                          className="max-h-96 max-w-full object-contain"
+                        />
+                      )}
+                      <p className="text-text-secondary text-sm">
+                        {localize('com_fs_document_preview')}
+                      </p>
+                    </>
+                  )}
+                  {preview.data?.content != null && (
                     <pre
                       className="border-border-light max-h-96 overflow-auto rounded-md border p-2 text-sm break-words whitespace-pre-wrap"
                       dir="auto"
                     >
-                      {preview.data}
+                      {preview.data.content}
                     </pre>
                   )}
                 </section>

@@ -58,7 +58,7 @@ beforeEach(async () => {
     conversationId: 'chat',
     engine,
     client,
-    session: { id: crypto.randomUUID(), token: 'memory-only-token', config, root, version: 1 },
+    session: { id: crypto.randomUUID(), token: 'memory-only-token', config, root, version: 2 },
   };
   setLocalFilesOwner(owner);
   setConnection('chat', entry);

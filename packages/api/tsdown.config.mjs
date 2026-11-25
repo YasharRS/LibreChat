@@ -14,6 +14,7 @@ export default defineConfig({
     'src/agents/files/edit-worker.ts',
     'src/auth/hash-worker.ts',
     'src/files/documents/spreadsheet-worker.ts',
+    'src/filesystem/reader-worker.ts',
   ],
   format: ['cjs'],
   platform: 'node',

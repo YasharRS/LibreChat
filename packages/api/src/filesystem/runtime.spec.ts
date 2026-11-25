@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { AIMessage, HumanMessage } from '@librechat/agents/langchain/messages';
 import { localFilesConfigSchema, serializeLocalFiles } from 'librechat-data-provider';
+import { projectArtifactPayload, projectOpenAIChatToolMessageContent } from '@librechat/agents';
 import type { Agents, LocalFilesInput, LocalFilesReview } from 'librechat-data-provider';
 import type { LocalFilesBinding } from './service';
 import {
@@ -71,6 +73,7 @@ it('uses the real tool invocation ID and each operation’s required input contr
       input: { operation: 'read', path: 'note.txt' },
     }),
     expect.any(AbortSignal),
+    undefined,
   );
   await expect(read.invoke({})).rejects.toThrow();
 });
@@ -124,4 +127,38 @@ it('translates an operational failure at the tool boundary without exposing diag
   });
   expect(JSON.stringify(result)).toContain('UNAVAILABLE');
   expect(JSON.stringify(result)).not.toMatch(/password|secret|cache payload/);
+});
+it('delivers image blocks through a real SDK ToolMessage for multimodal inference', async () => {
+  const session = binding();
+  session.invoke = async () => ({
+    ok: true,
+    value: { path: 'photo.png', images: [{ mime: 'image/jpeg', data: 'aW1hZ2U=' }] },
+  });
+  const read = createLocalFilesTools(session, 'chat', new AbortController().signal, false).find(
+    (entry) => entry.name === 'local_read',
+  )!;
+  const result = await read.invoke({
+    type: 'tool_call',
+    id: 'image-call',
+    name: 'local_read',
+    args: { path: 'photo.png' },
+  });
+  expect(result.content).toBe(
+    JSON.stringify({ ok: true, value: { path: 'photo.png', images: [{}] } }),
+  );
+  const blocks = [{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,aW1hZ2U=' } }];
+  expect(result.artifact).toEqual({ content: blocks });
+  const messages = projectOpenAIChatToolMessageContent(
+    projectArtifactPayload([
+      new AIMessage({
+        content: '',
+        tool_calls: [
+          { type: 'tool_call', id: 'image-call', name: 'local_read', args: { path: 'photo.png' } },
+        ],
+      }),
+      result,
+    ]),
+  );
+  expect(messages[messages.length - 1]).toBeInstanceOf(HumanMessage);
+  expect(messages[messages.length - 1].content).toEqual(expect.arrayContaining(blocks));
 });
