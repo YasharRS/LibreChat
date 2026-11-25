@@ -1,0 +1,18 @@
+# Merge into your active config. Keep its version and existing settings.
+localFiles:
+  enabled: true
+  requireReview: false
+  maxTextBytes: 1048576
+  maxMoveBytes: 16777216
+  maxFileBytes: 15728640
+  maxOutputBytes: 350000
+  maxPages: 100
+  maxImages: 4
+  maxImageBytes: 524288
+  maxImagePixels: 25000000
+  imageDimension: 1600
+  maxReaders: 2
+  extractionTimeoutMs: 30000
+  pageSize: 200
+  requestTimeoutMs: 60000
+  sessionTtlMs: 60000

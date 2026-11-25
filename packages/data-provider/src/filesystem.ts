@@ -1,12 +1,13 @@
 import { z } from 'zod';
 
-export const LOCAL_FILES_VERSION = 2 as const;
+export const LOCAL_FILES_VERSION = 3 as const;
 export const LOCAL_FILES_EVENT = 'on_local_file_request' as const;
 export const LOCAL_FILES_HEADER = 'X-Local-Files-Token';
 
 export const localFilesConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
+    requireReview: z.boolean().default(true),
     maxTextBytes: z
       .number()
       .int()
@@ -72,6 +73,12 @@ export function localFilesFormat(path: string) {
     : undefined;
 }
 
+/** These formats can be generated from text, CSV, or structured JSON without executing code. */
+export function localFilesDocument(path: string) {
+  const format = localFilesFormat(path);
+  return format?.[0] !== 'image' ? format : undefined;
+}
+
 export const localFilesRootSchema = z
   .object({
     id: z.uuid(),
@@ -110,7 +117,14 @@ export const localFilesInputSchema = z.discriminatedUnion('operation', [
       endPage: z.number().int().positive().optional(),
     })
     .strict(),
-  z.object({ operation: z.literal('write'), path: file, content: z.string() }).strict(),
+  z
+    .object({
+      operation: z.literal('write'),
+      path: file,
+      content: z.string(),
+      encoding: z.enum(['utf8', 'base64']).optional(),
+    })
+    .strict(),
   z
     .object({
       operation: z.literal('edit'),
@@ -125,6 +139,17 @@ export const localFilesInputSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('move'), path: file, destination: file }).strict(),
 ]);
 export type LocalFilesInput = z.infer<typeof localFilesInputSchema>;
+export type LocalFilesWrite = Extract<LocalFilesInput, { operation: 'write' }>;
+
+/** A null size denotes malformed base64. Check size before allocating decoded bytes. */
+export function localFilesWriteSize(input: LocalFilesWrite): number | null {
+  if (input.encoding !== 'base64') return new TextEncoder().encode(input.content).byteLength;
+  if (input.content.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(input.content)) return null;
+  let padding = 0;
+  if (input.content.endsWith('==')) padding = 2;
+  else if (input.content.endsWith('=')) padding = 1;
+  return (input.content.length / 4) * 3 - padding;
+}
 export type LocalFilesOperation = LocalFilesInput['operation'];
 export const LOCAL_FILES_TOOLS: Record<LocalFilesOperation, string> = {
   list: 'local_list',

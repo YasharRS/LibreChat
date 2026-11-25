@@ -6,9 +6,11 @@ const servers = (Array.isArray(mockConfig.webServer) ? mockConfig.webServer : []
   server.command.endsWith('start-server.js'),
 );
 if (servers.length !== 1) throw new Error('Local files tests require E2E_REPLICAS=1.');
+const direct = process.env.E2E_LOCAL_FILES_DIRECT === 'true';
 export default defineConfig({
   ...mockConfig,
   testDir: 'filesystem',
+  testMatch: direct ? '**/direct.spec.ts' : '**/chat.spec.ts',
   outputDir: 'filesystem/.test-results',
   timeout: 120_000,
   retries: 0,
@@ -17,7 +19,10 @@ export default defineConfig({
     ...server,
     env: {
       ...server.env,
-      CONFIG_PATH: path.resolve(__dirname, 'filesystem/librechat.yaml'),
+      CONFIG_PATH: path.resolve(
+        __dirname,
+        direct ? 'filesystem/direct.yaml' : 'filesystem/librechat.yaml',
+      ),
       ENDPOINTS: 'openAI,agents',
       OPENAI_MODELS: 'gpt-4o-mini',
       OPENAI_API_KEY: 'sk-e2e-local-files-placeholder',

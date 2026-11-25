@@ -1,0 +1,17 @@
+# Merge into your active config. Keep its version and existing settings.
+localFiles:
+  enabled: true
+  maxTextBytes: 1048576
+  maxMoveBytes: 16777216
+  pageSize: 200
+  requestTimeoutMs: 60000
+  sessionTtlMs: 60000
+
+endpoints:
+  agents:
+    toolApproval:
+      enabled: true
+      # Append to an existing allow list; keep other tool-policy settings.
+      allow:
+        - local_list
+        - local_read

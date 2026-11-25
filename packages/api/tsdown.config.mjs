@@ -15,6 +15,7 @@ export default defineConfig({
     'src/auth/hash-worker.ts',
     'src/files/documents/spreadsheet-worker.ts',
     'src/filesystem/reader-worker.ts',
+    'src/filesystem/writer-worker.ts',
   ],
   format: ['cjs'],
   platform: 'node',

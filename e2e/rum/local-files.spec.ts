@@ -66,7 +66,7 @@ test('uses real browser handles and refuses unreviewed, stale, and replayed writ
     const sessionId = crypto.randomUUID();
     const input = { operation: 'write', path: 'note.txt', content: 'approved' } as const;
     const command: LocalFilesCommand = {
-      version: 2,
+      version: 3,
       id: crypto.randomUUID(),
       sessionId,
       rootId: crypto.randomUUID(),

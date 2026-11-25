@@ -2379,5 +2379,6 @@ export {
   createLocalFilesSession,
   heartbeatLocalFiles,
   completeLocalFiles,
+  renderLocalFile,
   disconnectLocalFiles,
 } from './filesystem-service';

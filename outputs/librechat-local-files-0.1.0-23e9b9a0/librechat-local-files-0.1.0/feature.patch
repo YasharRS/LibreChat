@@ -1,0 +1,4731 @@
+diff --git a/.gitignore b/.gitignore
+index 90353158d612ad3294ff15b84ee159e6b87c2032..6c8cdb62e5a6e50512d1097afff872c512f8da9a 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -191,8 +191,10 @@ codedb.snapshot
+ scripts/activity-labels/results/
+ 
+ !e2e/lighthouse/librechat.yaml
++!e2e/filesystem/librechat.yaml
+ /.lighthouse/
+ /e2e/lighthouse/.test-results/
++/e2e/filesystem/.test-results/
+ /e2e/rum/.test-results/
+ # Chrome user-data directories a Lighthouse run leaves in the repository root when the browser
+ # is handed a Windows profile path from WSL: the whole path arrives as one directory name.
+diff --git a/api/server/controllers/agents/client.js b/api/server/controllers/agents/client.js
+index 38adaf725fb56e1e40c1dc368986063c95007a94..6ddbaf790a9287c15f240704a51f49e2f6247684 100644
+--- a/api/server/controllers/agents/client.js
++++ b/api/server/controllers/agents/client.js
+@@ -1,10 +1,13 @@
+ const { GraphEvents } = require('@librechat/agents');
+ const { getMCPRequestContext } = require('~/server/services/MCPRequestContext');
++const filesystem = require('~/server/services/Filesystem');
+ require('events').EventEmitter.defaultMaxListeners = 100;
+ const { logger, MAX_AGENT_EVENT_ACTOR_ENCODING_LENGTH } = require('@librechat/data-schemas');
+ const { getBufferString, HumanMessage } = require('@librechat/agents/langchain/messages');
+ const {
+   createRun,
++  markLocalFileApprovalRequests,
++  localFilesAdmission,
+   isEnabled,
+   settleOutputTruncation,
+   checkAccess,
+@@ -4401,7 +4404,7 @@ class AgentClient extends BaseClient {
+       this.options.agent,
+       ...(this.agentConfigs?.values() ?? []),
+     ]);
+-    const interruptPayload =
++    const interruptPayload = markLocalFileApprovalRequests(
+       interrupt.payload?.type === 'tool_approval'
+         ? markToolApprovalAllowAlways(
+             markNativeCodeToolApprovalRequests(interrupt.payload, reachableAgents),
+@@ -4424,7 +4427,8 @@ class AgentClient extends BaseClient {
+               asksEveryUse: asksEveryUse(this.options.req),
+             },
+           )
+-        : interrupt.payload;
++        : interrupt.payload,
++    );
+     const codeExecutionBinding =
+       interrupt.payload?.type === 'tool_approval' &&
+       interrupt.payload.action_requests.some(
+@@ -4594,9 +4598,11 @@ class AgentClient extends BaseClient {
+       const runCanPause = canAgentGraphPause({
+         policy: effectiveToolApprovalPolicy,
+         agents: topLevelAgents,
+-        hostGeneratedToolNames:
++        ...localFilesAdmission(
++          this.options.req,
++          admissionToolApprovalHooks,
+           this.options.subagentTasks == null ? undefined : [Constants.CHECK_BACKGROUND_TASK],
+-        resolvedProgrammaticHooks: admissionToolApprovalHooks,
++        ),
+         pluginHookSource: getPluginHookSource(),
+         askUserQuestionAdminDisabled,
+         toolApprovalAllows: resolveRunToolApprovalAllows(
+@@ -5007,6 +5013,14 @@ class AgentClient extends BaseClient {
+           activityPhase?.handlers(offsetHandlers) ??
+           (activityLabel ? createAssistantPhaseStampingHandlers(offsetHandlers) : offsetHandlers);
+         const createRunPromise = createRun({
++          localFiles: filesystem.bind({
++            req: this.options.req,
++            streamId,
++            jobCreatedAt: this.jobCreatedAt,
++            transport: GenerationJobManager,
++            runId: this.responseMessageId,
++            config: appConfig,
++          }),
+           sdkModelHost: this.options.req?.app?.locals?.sdkModelHost,
+           sdkFiles: this.options.sdkFiles,
+           grantExecution: grantExecution(getMCPRequestContext(this.options.req)),
+@@ -5830,6 +5844,14 @@ class AgentClient extends BaseClient {
+         activityPhase?.handlers(offsetHandlers) ??
+         (activityLabel ? createAssistantPhaseStampingHandlers(offsetHandlers) : offsetHandlers);
+       run = await createRun({
++        localFiles: filesystem.bind({
++          req: this.options.req,
++          streamId,
++          jobCreatedAt: this.jobCreatedAt,
++          transport: GenerationJobManager,
++          runId: this.responseMessageId,
++          config: appConfig,
++        }),
+         sdkModelHost: this.options.req?.app?.locals?.sdkModelHost,
+         sdkFiles: this.options.sdkFiles,
+         sdkResumeState: { content: seedContent, steps: runSteps },
+diff --git a/api/server/index.js b/api/server/index.js
+index 06dd892e3c9f3bd8c5c5223d2406d6d75cb95a5d..2f228e8004956f1b92ee7cd72d2e2215f62e66e6 100644
+--- a/api/server/index.js
++++ b/api/server/index.js
+@@ -528,6 +528,7 @@ const startServer = async () => {
+ 
+   app.use('/api/tags', routes.tags);
+   app.use('/api/mcp', routes.mcp);
++  app.use('/api/local-files', routes.filesystem);
+   app.use('/api/rum', routes.rum);
+ 
+   app.use('/metrics', metricsRouter);
+diff --git a/api/server/routes/config.js b/api/server/routes/config.js
+index 3827b06599f785be303244826c4efb092fe977a9..159f22bb4824dfcd1f85d7bf7436cea7dd28775b 100644
+--- a/api/server/routes/config.js
++++ b/api/server/routes/config.js
+@@ -1,6 +1,7 @@
+ const express = require('express');
+ const {
+   isEnabled,
++  localFilesCapabilities,
+   resolveEmailChangeSettings,
+   checkEmailConfig,
+   isLangfuseSettingsAvailable,
+@@ -316,6 +317,7 @@ router.get('/', async function (req, res) {
+       ...preLoginPayload,
+       ...publicSharePayload,
+       ...buildPostLoginPayload(appConfig),
++      ...localFilesCapabilities(appConfig),
+       ...getConversationTitleCapabilities(appConfig?.interfaceConfig),
+       conversationListLimits,
+       sharedLinksSnapshotFilesEnabled: sharedLinksEnabled && isFileSnapshotEnabled(appConfig),
+diff --git a/api/server/routes/filesystem.js b/api/server/routes/filesystem.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..9ee2ed3216fdbf41288c2210872a58985642b125
+--- /dev/null
++++ b/api/server/routes/filesystem.js
+@@ -0,0 +1,17 @@
++const express = require('express');
++const {
++  requireJwtAuth,
++  requireSameOrigin,
++  messageUserLimiter,
++  strictConfigMiddleware,
++} = require('~/server/middleware');
++const filesystem = require('~/server/services/Filesystem');
++
++const router = express.Router();
++const handlers = filesystem.router();
++router.use(requireJwtAuth, requireSameOrigin, strictConfigMiddleware);
++router.post('/sessions', messageUserLimiter, handlers.create);
++router.post('/sessions/:id/heartbeat', handlers.heartbeat);
++router.post('/sessions/:id/results/:requestId', handlers.result);
++router.delete('/sessions/:id', handlers.remove);
++module.exports = router;
+diff --git a/api/server/routes/index.js b/api/server/routes/index.js
+index 17285a81a6458e4e23d023c91f8259b8f7f21cde..e3b328359ecb9580fae002f66f38f859c5cae0e2 100644
+--- a/api/server/routes/index.js
++++ b/api/server/routes/index.js
+@@ -39,6 +39,7 @@ const channels = require('./channels');
+ const roles = require('./roles');
+ const oauth = require('./oauth');
+ const files = require('./files');
++const filesystem = require('./filesystem');
+ const share = require('./share');
+ const tags = require('./tags');
+ const auth = require('./auth');
+@@ -73,6 +74,7 @@ module.exports = {
+   roles,
+   oauth,
+   files,
++  filesystem,
+   share,
+   banner,
+   openapi,
+diff --git a/api/server/services/Filesystem.js b/api/server/services/Filesystem.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..29fb50de18d72eee02cbea12e3ee9ae774e602a6
+--- /dev/null
++++ b/api/server/services/Filesystem.js
+@@ -0,0 +1,5 @@
++const { createLocalFilesService, standardCache } = require('@librechat/api');
++
++module.exports = createLocalFilesService({
++  store: standardCache('local-files', undefined, undefined, { throwOnErrors: true }),
++});
+diff --git a/client/src/Providers/ChatTransportContext.tsx b/client/src/Providers/ChatTransportContext.tsx
+index acc7b59f95dfacfc3eeef0754e526d60729e18ae..c57f3440ddae4e6381b6be3efbb4d2d1aa31ac98 100644
+--- a/client/src/Providers/ChatTransportContext.tsx
++++ b/client/src/Providers/ChatTransportContext.tsx
+@@ -2,6 +2,7 @@ import { createContext, useContext } from 'react';
+ import { createSSETransport } from '@librechat/chat';
+ import { EndpointURLs } from 'librechat-data-provider';
+ import type { Transport } from '~/hooks/Chat/contract';
++import { startWithLocalFiles } from '~/components/Filesystem/connection';
+ import * as requests from '~/data-provider';
+ 
+ /**
+@@ -12,7 +13,9 @@ import * as requests from '~/data-provider';
+ export const defaultChatTransport: Transport = {
+   stream: ({ token }) => createSSETransport({ token }),
+   start: ({ server, payload }, options) =>
+-    requests.postGenerationRequest<unknown>(server, payload, options),
++    startWithLocalFiles(payload, (bound) =>
++      requests.postGenerationRequest<unknown>(server, bound, options),
++    ),
+   abort: (params) => requests.abortStream(params),
+   abortRun: ({ endpoint, abortKey }, { token }) =>
+     fetch(`${EndpointURLs[endpoint]}/abort`, {
+diff --git a/client/src/components/Chat/Messages/Content/Part.tsx b/client/src/components/Chat/Messages/Content/Part.tsx
+index 46511e65ed4559d6cb3143c0a894d667d368accd..2ab180d74674cccdf580eeb7a35b07f0fdd2dbca 100644
+--- a/client/src/components/Chat/Messages/Content/Part.tsx
++++ b/client/src/components/Chat/Messages/Content/Part.tsx
+@@ -102,6 +102,7 @@ export const renderers: PartRenderers = extendPartRenderers({
+       <>
+         {prepared}
+         <ToolApproval
++          name={toolCall.name}
+           approval={toolCall.approval}
+           toolCallId={toolCall.id ?? ''}
+           args={toolCall.args}
+diff --git a/client/src/components/Chat/Messages/Content/ToolApproval.tsx b/client/src/components/Chat/Messages/Content/ToolApproval.tsx
+index a543d2862bf9a39c6ffbfd6c6bd49735f5aba4f6..987b2e8d3ed71a625d36b711d7e363e0e06c3d99 100644
+--- a/client/src/components/Chat/Messages/Content/ToolApproval.tsx
++++ b/client/src/components/Chat/Messages/Content/ToolApproval.tsx
+@@ -1,5 +1,6 @@
+ import { useId, useContext, useEffect, useMemo } from 'react';
+ import { Button, TextareaAutosize } from '@librechat/client';
++import { localFilesOperation, localFilesMutation } from 'librechat-data-provider';
+ import { useComposerPresentsApproval, useOptionalChatSurface } from '@librechat/chat/react';
+ import { SCHEDULE_APPROVAL_REASON, SUBSCRIPTION_APPROVAL_REASON } from 'librechat-data-provider';
+ import {
+@@ -21,10 +22,12 @@ import {
+ } from '@librechat/chat';
+ import type { Agents } from 'librechat-data-provider';
+ import type { KeyboardEvent } from 'react';
++import type { LocalReviewProps } from '~/components/Filesystem/Review';
+ import type { TranslationKeys } from '~/hooks';
+ import { useApprovalContext, useResumeSubmit } from './ApprovalContext';
+ import { cn, forceResize, insertTextAtCursor, logger } from '~/utils';
+ import { NO_HOST_BINDINGS } from '~/hooks/Input/useComposerBindings';
++import LocalReview from '~/components/Filesystem/Review';
+ import { ChatContext } from '~/Providers/ChatContext';
+ import { useLocalize } from '~/hooks';
+ 
+@@ -100,7 +103,7 @@ const descriptionKeys = new Map<string, TranslationKeys>([
+  * only the record of the request: the panel owns the decisions and the submit,
+  * and it overlays the tail of the thread where this card sits.
+  */
+-export default function ToolApproval({
++function StandardApproval({
+   approval,
+   toolCallId,
+   args,
+@@ -521,3 +524,12 @@ export default function ToolApproval({
+     </div>
+   );
+ }
++
++export default function ToolApproval(props: LocalReviewProps) {
++  const operation = localFilesOperation(props.name ?? '');
++  return operation && localFilesMutation(operation) ? (
++    <LocalReview {...props} />
++  ) : (
++    <StandardApproval {...props} />
++  );
++}
+diff --git a/client/src/components/Filesystem/Loading.tsx b/client/src/components/Filesystem/Loading.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..39834e36d6ba13a150f580963935a25ea38d65d6
+--- /dev/null
++++ b/client/src/components/Filesystem/Loading.tsx
+@@ -0,0 +1,12 @@
++import { Spinner } from '@librechat/client';
++import useLocalize from '~/hooks/useLocalize';
++
++export default function Loading() {
++  const localize = useLocalize();
++  return (
++    <div role="status" className="flex items-center gap-2">
++      <Spinner size={16} />
++      <span className="sr-only">{localize('com_ui_loading')}</span>
++    </div>
++  );
++}
+diff --git a/client/src/components/Filesystem/Panel.tsx b/client/src/components/Filesystem/Panel.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..ee7bdd6f0b268762d1a544e286dd14ed2141adec
+--- /dev/null
++++ b/client/src/components/Filesystem/Panel.tsx
+@@ -0,0 +1,219 @@
++import { useState } from 'react';
++import { Button } from '@librechat/client';
++import { useParams } from 'react-router-dom';
++import { QueryKeys } from 'librechat-data-provider';
++import { boundApprovalLabel } from '@librechat/chat';
++import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
++import type { Folder } from './engine';
++import { useConnections, setConnection, disconnect, localFilesOwner } from './connection';
++import { Filesystem, FilesystemError, filesystemError } from './engine';
++import { registerFolder, recallFolder, localJournal } from './storage';
++import { useChatTransport } from '~/Providers/ChatTransportContext';
++import { useGetStartupConfig } from '~/data-provider/Endpoints';
++import { useAuthContext } from '~/hooks/AuthContext';
++import useLocalize from '~/hooks/useLocalize';
++import { errorKeys } from './copy';
++import Loading from './Loading';
++import Tree from './Tree';
++
++type Picker = Window & { showDirectoryPicker?: (options: { mode: 'read' }) => Promise<Folder> };
++export default function Panel() {
++  const localize = useLocalize();
++  const { user } = useAuthContext();
++  const owner = localFilesOwner(user) ?? '';
++  const transport = useChatTransport();
++  const { conversationId = 'new' } = useParams();
++  const entries = useConnections();
++  const candidate = entries.get(conversationId);
++  const entry = candidate?.owner === owner ? candidate : undefined;
++  const { data: startup } = useGetStartupConfig();
++  const config = startup?.localFiles;
++  const client = useQueryClient();
++  const [selected, setSelected] = useState('');
++  const [failure, setFailure] = useState<ReturnType<typeof filesystemError>>();
++  const supported =
++    window.isSecureContext &&
++    typeof (window as Picker).showDirectoryPicker === 'function' &&
++    !!navigator.locks;
++  const remembered = useQuery({
++    queryKey: [QueryKeys.localFiles, owner, 'remembered'],
++    queryFn: () => recallFolder(owner),
++    enabled: !!owner && supported && config?.available === true,
++    retry: false,
++  });
++  const connect = useMutation({
++    mutationFn: async ({ folder }: { folder: Folder }) => {
++      if (!config?.available || !owner) throw new FilesystemError('UNAVAILABLE');
++      let descriptor;
++      try {
++        descriptor = await registerFolder(owner, folder);
++      } catch (error) {
++        throw new FilesystemError(filesystemError(error));
++      }
++      if (entry) disconnect(entry);
++      setConnection(conversationId, {
++        owner,
++        conversationId,
++        root: descriptor,
++        engine: new Filesystem(folder, config, localJournal(owner)),
++        client,
++        stop: (id, generationCreatedAt) =>
++          transport.abort({ conversationId: id, generationCreatedAt }),
++      });
++      setSelected('');
++      setFailure(undefined);
++      await client.invalidateQueries({ queryKey: [QueryKeys.localFiles, owner, 'remembered'] });
++    },
++    onError: (error) => setFailure(filesystemError(error)),
++  });
++  const preview = useQuery({
++    queryKey: [QueryKeys.localFiles, owner, entry?.root.id, 'preview', selected],
++    enabled: !!entry && !!selected,
++    queryFn: async () => {
++      const result = await entry!.engine.inspect({ operation: 'read', path: selected });
++      if (!result.ok) throw new FilesystemError(result.error.code);
++      return result.value.content ?? '';
++    },
++    retry: false,
++    refetchOnWindowFocus: false,
++  });
++  const choose = async () => {
++    try {
++      const folder = await (window as Picker).showDirectoryPicker!({ mode: 'read' });
++      connect.mutate({ folder });
++    } catch (error) {
++      setFailure(filesystemError(error));
++    }
++  };
++  const restore = async () => {
++    const saved = remembered.data;
++    if (!saved) return;
++    try {
++      if ((await saved.folder.requestPermission({ mode: 'read' })) !== 'granted')
++        throw new FilesystemError('PERMISSION_DENIED');
++      connect.mutate(saved);
++    } catch (error) {
++      setFailure(filesystemError(error));
++    }
++  };
++  const enable = async () => {
++    if (!entry || !config) return;
++    const engine = new Filesystem(entry.engine.folder, config, localJournal(owner));
++    try {
++      if (!(await engine.enable())) throw new FilesystemError('PERMISSION_DENIED');
++      disconnect(entry);
++      setConnection(conversationId, {
++        owner,
++        conversationId,
++        engine,
++        root: { ...entry.root, access: 'readwrite' },
++        client,
++        stop: (id, generationCreatedAt) =>
++          transport.abort({ conversationId: id, generationCreatedAt }),
++      });
++      setFailure(undefined);
++    } catch (error) {
++      setFailure(filesystemError(error));
++    }
++  };
++  return (
++    <section className="flex min-h-0 flex-col gap-3 p-3" aria-label={localize('com_fs_title')}>
++      <h2 className="text-lg font-semibold">{localize('com_fs_title')}</h2>
++      <p className="text-text-secondary text-sm">{localize('com_fs_description')}</p>
++      {!supported && <p role="status">{localize('com_fs_browser')}</p>}
++      {supported && !config?.available && (
++        <p role="status">{localize('com_fs_approval_disabled')}</p>
++      )}
++      {supported && config?.available && (
++        <>
++          <div className="flex flex-wrap gap-2">
++            <Button
++              variant="outline"
++              disabled={connect.isLoading}
++              onClick={() => {
++                void choose();
++              }}
++            >
++              {localize('com_fs_choose')}
++            </Button>
++            {!entry && remembered.data && (
++              <Button
++                variant="quiet"
++                disabled={connect.isLoading}
++                onClick={() => {
++                  void restore();
++                }}
++              >
++                {localize('com_fs_reconnect')}
++              </Button>
++            )}
++          </div>
++          {entry && (
++            <>
++              <div role="status" className="flex flex-wrap items-center gap-2">
++                <bdi>{boundApprovalLabel(entry.root.name, 255).label}</bdi>
++                <span className="text-text-secondary text-sm">
++                  {localize(
++                    entry.root.access === 'read' ? 'com_fs_read_only' : 'com_fs_review_changes',
++                  )}
++                </span>
++              </div>
++              <div className="flex flex-wrap gap-2">
++                {entry.root.access === 'read' && (
++                  <Button
++                    variant="outline"
++                    onClick={() => {
++                      void enable();
++                    }}
++                  >
++                    {localize('com_fs_enable_write')}
++                  </Button>
++                )}
++                <Button
++                  variant="quiet"
++                  onClick={() => {
++                    disconnect(entry);
++                    setSelected('');
++                  }}
++                >
++                  {localize('com_fs_disconnect')}
++                </Button>
++                <Button
++                  variant="quiet"
++                  onClick={() => {
++                    void client.invalidateQueries({
++                      queryKey: [QueryKeys.localFiles, owner, entry.root.id],
++                    });
++                  }}
++                >
++                  {localize('com_fs_refresh')}
++                </Button>
++              </div>
++              <Tree key={entry.root.id} entry={entry} onOpen={setSelected} />
++              {selected && (
++                <section className="min-w-0" aria-label={localize('com_fs_preview')}>
++                  <h3 className="font-medium break-all">
++                    <bdi>{boundApprovalLabel(selected, 4096).label}</bdi>
++                  </h3>
++                  {preview.isLoading && <Loading />}
++                  {preview.isError && (
++                    <p role="alert">{localize(errorKeys[filesystemError(preview.error)])}</p>
++                  )}
++                  {!preview.isLoading && !preview.isError && (
++                    <pre
++                      className="border-border-light max-h-96 overflow-auto rounded-md border p-2 text-sm break-words whitespace-pre-wrap"
++                      dir="auto"
++                    >
++                      {preview.data}
++                    </pre>
++                  )}
++                </section>
++              )}
++            </>
++          )}
++        </>
++      )}
++      {failure && <p role="alert">{localize(errorKeys[failure])}</p>}
++    </section>
++  );
++}
+diff --git a/client/src/components/Filesystem/Review.tsx b/client/src/components/Filesystem/Review.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..02fc7b648808352dcf04ac6d59e97b5eccb60cde
+--- /dev/null
++++ b/client/src/components/Filesystem/Review.tsx
+@@ -0,0 +1,193 @@
++import { useContext, useEffect, useState } from 'react';
++import { Button } from '@librechat/client';
++import { useQuery } from '@tanstack/react-query';
++import { boundApprovalLabel } from '@librechat/chat';
++import { useComposerPresentsApproval } from '@librechat/chat/react';
++import { QueryKeys, localFilesInputSchema, localFilesOperation } from 'librechat-data-provider';
++import type { Agents } from 'librechat-data-provider';
++import {
++  useApprovalContext,
++  useResumeSubmit,
++} from '~/components/Chat/Messages/Content/ApprovalContext';
++import { FilesystemError, filesystemError } from './engine';
++import { ChatContext } from '~/Providers/ChatContext';
++import useLocalize from '~/hooks/useLocalize';
++import { useConnections } from './connection';
++import { errorKeys } from './copy';
++import Loading from './Loading';
++
++export interface LocalReviewProps {
++  name?: string;
++  approval: NonNullable<Agents.ToolCall['approval']>;
++  toolCallId: string;
++  args: string | Record<string, unknown> | undefined;
++  surface?: 'thread' | 'composer';
++}
++export default function Review({
++  name = '',
++  approval,
++  toolCallId,
++  args,
++  surface = 'thread',
++}: LocalReviewProps) {
++  const localize = useLocalize();
++  const [failure, setFailure] = useState<ReturnType<typeof filesystemError>>();
++  const conversationId = useContext(ChatContext)?.conversation?.conversationId ?? '';
++  const entry = useConnections().get(conversationId);
++  const { actionId } = approval;
++  const composer = useComposerPresentsApproval(conversationId, actionId);
++  const {
++    registerToolCall,
++    unregisterToolCall,
++    setDecision,
++    getDecision,
++    getStatus,
++    isReady,
++    getLeadToolCallId,
++  } = useApprovalContext();
++  const { submitToolApproval } = useResumeSubmit();
++  const preview = useQuery({
++    queryKey: [
++      QueryKeys.localFiles,
++      entry?.owner,
++      entry?.root.id,
++      entry?.session?.id,
++      'review',
++      actionId,
++      toolCallId,
++      args,
++    ],
++    enabled: !!entry?.session,
++    queryFn: async () => {
++      let parsed: unknown;
++      try {
++        parsed = typeof args === 'string' ? JSON.parse(args) : args;
++      } catch {
++        throw new FilesystemError('INVALID_REQUEST');
++      }
++      if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed))
++        throw new FilesystemError('INVALID_REQUEST');
++      const input = localFilesInputSchema.safeParse({
++        ...parsed,
++        operation: localFilesOperation(name),
++      });
++      if (!input.success) throw new FilesystemError('INVALID_REQUEST');
++      if (!entry?.session) throw new FilesystemError('UNAVAILABLE');
++      try {
++        return await entry.engine.preview(input.data, entry.session.id);
++      } catch (error) {
++        throw new FilesystemError(filesystemError(error));
++      }
++    },
++    retry: false,
++    staleTime: Infinity,
++    refetchOnWindowFocus: false,
++  });
++  useEffect(() => {
++    registerToolCall(actionId, toolCallId);
++    return () => unregisterToolCall(actionId, toolCallId);
++  }, [actionId, toolCallId, registerToolCall, unregisterToolCall]);
++  const status = getStatus(actionId);
++  const locked = status === 'submitting' || status === 'submitted' || status === 'expired';
++  const decision = getDecision(actionId, toolCallId);
++  if (status === 'submitted' || (surface === 'thread' && composer)) return null;
++  const ready = preview.data;
++  return (
++    <div
++      data-testid="tool-approval"
++      data-tool-call-id={toolCallId}
++      className="border-border-medium my-2 flex min-w-0 flex-col gap-2 rounded-lg border p-3"
++    >
++      <p className="font-medium">{localize('com_fs_review_title')}</p>
++      {!entry?.session && <p role="alert">{localize('com_fs_original_tab')}</p>}
++      {entry?.session && preview.isLoading && <Loading />}
++      {entry?.session && preview.isError && (
++        <p role="alert">{localize(errorKeys[filesystemError(preview.error)])}</p>
++      )}
++      {ready && (
++        <>
++          <p className="break-all">
++            <bdi>{boundApprovalLabel(ready.input.path, 4096).label}</bdi>
++          </p>
++          {ready.input.operation === 'move' ? (
++            <>
++              <p className="break-all">
++                <bdi>{boundApprovalLabel(ready.input.destination, 4096).label}</bdi>
++              </p>
++              <p>{localize('com_fs_move_notice')}</p>
++            </>
++          ) : (
++            ready.input.operation !== 'mkdir' && (
++              <>
++                <h4 className="font-medium">{localize('com_fs_before')}</h4>
++                <pre
++                  dir="auto"
++                  className="max-h-60 overflow-auto text-sm break-words whitespace-pre-wrap"
++                >
++                  {ready.before}
++                </pre>
++                <h4 className="font-medium">{localize('com_fs_after')}</h4>
++                <pre
++                  dir="auto"
++                  className="max-h-60 overflow-auto text-sm break-words whitespace-pre-wrap"
++                >
++                  {ready.after}
++                </pre>
++              </>
++            )
++          )}
++        </>
++      )}
++      <div className="flex flex-wrap gap-2">
++        <Button
++          aria-pressed={decision?.decision === 'approve'}
++          variant={decision?.decision === 'approve' ? 'default' : 'outline'}
++          disabled={
++            locked ||
++            !ready ||
++            !entry?.engine.canWrite ||
++            !approval.allowed_decisions?.includes('approve')
++          }
++          onClick={() => {
++            if (!ready || !entry) return;
++            try {
++              setDecision(actionId, toolCallId, {
++                tool_call_id: toolCallId,
++                decision: 'approve',
++                scope: 'once',
++                localFiles: entry.engine.approve(ready, toolCallId),
++              });
++              setFailure(undefined);
++            } catch (error) {
++              setFailure(filesystemError(error));
++              setDecision(actionId, toolCallId, null);
++            }
++          }}
++        >
++          {localize('com_ui_approve')}
++        </Button>
++        <Button
++          aria-pressed={decision?.decision === 'reject'}
++          variant={decision?.decision === 'reject' ? 'default' : 'outline'}
++          disabled={locked}
++          onClick={() => {
++            if (ready) entry?.engine.revoke(ready.review.id);
++            setDecision(actionId, toolCallId, { tool_call_id: toolCallId, decision: 'reject' });
++          }}
++        >
++          {localize('com_ui_reject')}
++        </Button>
++        {surface === 'thread' && getLeadToolCallId(actionId) === toolCallId && (
++          <Button
++            disabled={locked || !isReady(actionId)}
++            onClick={() => submitToolApproval(actionId)}
++          >
++            {localize('com_ui_submit')}
++          </Button>
++        )}
++      </div>
++      <p className="text-text-secondary text-sm">{localize('com_fs_once')}</p>
++      {failure && <p role="alert">{localize(errorKeys[failure])}</p>}
++    </div>
++  );
++}
+diff --git a/client/src/components/Filesystem/Tree.tsx b/client/src/components/Filesystem/Tree.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..91e7647bafa52dd9e36f03fe9d2c2774fb6fb694
+--- /dev/null
++++ b/client/src/components/Filesystem/Tree.tsx
+@@ -0,0 +1,97 @@
++import { useState } from 'react';
++import { Button } from '@librechat/client';
++import { QueryKeys } from 'librechat-data-provider';
++import { boundApprovalLabel } from '@librechat/chat';
++import { useInfiniteQuery } from '@tanstack/react-query';
++import { ChevronRight, ChevronDown, File, Folder } from 'lucide-react';
++import type { Connection } from './connection';
++import { FilesystemError, filesystemError } from './engine';
++import useLocalize from '~/hooks/useLocalize';
++import { errorKeys } from './copy';
++import Loading from './Loading';
++
++export default function Tree({
++  entry,
++  path = '',
++  onOpen,
++}: {
++  entry: Connection;
++  path?: string;
++  onOpen: (path: string) => void;
++}) {
++  const localize = useLocalize();
++  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
++  const query = useInfiniteQuery({
++    queryKey: [QueryKeys.localFiles, entry.owner, entry.root.id, 'list', path],
++    queryFn: async ({ pageParam = 0 }) => {
++      const result = await entry.engine.inspect({
++        operation: 'list',
++        path,
++        cursor: Number(pageParam),
++      });
++      if (!result.ok) throw new FilesystemError(result.error.code);
++      return result.value;
++    },
++    getNextPageParam: (page) => page.nextCursor,
++    retry: false,
++    refetchOnWindowFocus: false,
++  });
++  if (query.isLoading) return <Loading />;
++  if (query.isError) return <p role="alert">{localize(errorKeys[filesystemError(query.error)])}</p>;
++  const entries = query.data.pages.flatMap((page) => page.entries ?? []);
++  return (
++    <div className="min-w-0">
++      {entries.length === 0 && (
++        <p className="text-text-secondary p-2 text-sm">{localize('com_fs_empty')}</p>
++      )}
++      <ul aria-label={localize('com_fs_files')} className="min-w-0 ps-2">
++        {entries.map((item) => {
++          const child = path ? `${path}/${item.name}` : item.name;
++          const open = expanded.has(child);
++          const directory = item.kind === 'directory';
++          return (
++            <li key={item.name} className="min-w-0">
++              <Button
++                variant="quiet"
++                size="sm"
++                className="w-full justify-start"
++                aria-expanded={directory ? open : undefined}
++                onClick={() => {
++                  if (!directory) {
++                    onOpen(child);
++                    return;
++                  }
++                  setExpanded((previous) => {
++                    const next = new Set(previous);
++                    if (open) next.delete(child);
++                    else next.add(child);
++                    return next;
++                  });
++                }}
++              >
++                {directory && open && <ChevronDown className="size-4 shrink-0" />}
++                {directory && !open && <ChevronRight className="size-4 shrink-0" />}
++                {!directory && <File className="size-4 shrink-0" />}
++                {directory && <Folder className="size-4 shrink-0" />}
++                <bdi className="truncate">{boundApprovalLabel(item.name, 255).label}</bdi>
++              </Button>
++              {directory && open && <Tree entry={entry} path={child} onOpen={onOpen} />}
++            </li>
++          );
++        })}
++      </ul>
++      {query.hasNextPage && (
++        <Button
++          variant="outline"
++          size="sm"
++          disabled={query.isFetchingNextPage}
++          onClick={() => {
++            void query.fetchNextPage();
++          }}
++        >
++          {localize('com_ui_load_more')}
++        </Button>
++      )}
++    </div>
++  );
++}
+diff --git a/client/src/components/Filesystem/__tests__/Review.test.tsx b/client/src/components/Filesystem/__tests__/Review.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..0a094e76a961f09d2f33d072c49161d0100f3a15
+--- /dev/null
++++ b/client/src/components/Filesystem/__tests__/Review.test.tsx
+@@ -0,0 +1,121 @@
++import React from 'react';
++import { RecoilRoot } from 'recoil';
++import { webcrypto } from 'node:crypto';
++import { File as NativeFile } from 'node:buffer';
++import { localFilesConfigSchema } from 'librechat-data-provider';
++import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
++import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
++import type { Agents } from 'librechat-data-provider';
++import type { Connection } from '../connection';
++import ApprovalProvider, {
++  useApprovalContext,
++} from '~/components/Chat/Messages/Content/ApprovalContext';
++import { clearLocalFiles, localFilesOwner, setConnection, setLocalFilesOwner } from '../connection';
++import { DiskFile, DiskFolder } from 'test/filesystem';
++import { ChatContext } from '~/Providers/ChatContext';
++import { Filesystem } from '../engine';
++import Review from '../Review';
++
++// The resume HTTP boundary is external to a local review; keep the real approval store.
++jest.mock('~/data-provider', () => ({
++  useSubmitToolApprovalMutation: () => ({ mutate: jest.fn() }),
++  useSubmitAskAnswerMutation: () => ({ mutate: jest.fn() }),
++}));
++jest.mock('~/Providers/ChatContext', () => ({
++  ChatContext: jest.requireActual('react').createContext(null),
++}));
++
++const approval: NonNullable<Agents.ToolCall['approval']> = {
++  actionId: 'action',
++  allowed_decisions: ['approve', 'reject', 'edit'],
++  allow_always: true,
++};
++let entry: Connection;
++let folder: DiskFolder;
++let client: QueryClient;
++beforeAll(() => {
++  Object.defineProperty(globalThis, 'File', { configurable: true, value: NativeFile });
++  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
++});
++beforeEach(async () => {
++  client = new QueryClient({
++    defaultOptions: { queries: { retry: false } },
++    logger: { log: () => undefined, warn: () => undefined, error: () => undefined },
++  });
++  folder = new DiskFolder();
++  folder.files.set('note.txt', new DiskFile('note.txt', 'original'));
++  const config = localFilesConfigSchema.parse({ enabled: true });
++  const engine = new Filesystem(folder, config, {
++    get: async () => undefined,
++    put: async () => undefined,
++  });
++  await engine.enable();
++  const owner = localFilesOwner({ id: 'user' })!;
++  const root = { id: crypto.randomUUID(), name: 'workspace', access: 'readwrite' as const };
++  entry = {
++    owner,
++    root,
++    conversationId: 'chat',
++    engine,
++    client,
++    session: { id: crypto.randomUUID(), token: 'memory-only-token', config, root, version: 1 },
++  };
++  setLocalFilesOwner(owner);
++  setConnection('chat', entry);
++});
++afterEach(() => {
++  entry.session = undefined;
++  clearLocalFiles();
++  client.clear();
++});
++function Probe() {
++  const state = useApprovalContext();
++  return (
++    <output data-testid="decision">{JSON.stringify(state.getDecision('action', 'call'))}</output>
++  );
++}
++function mount(args: string | Record<string, unknown> = { path: 'note.txt', content: 'proposed' }) {
++  return render(
++    <QueryClientProvider client={client}>
++      <RecoilRoot>
++        <ApprovalProvider>
++          <ChatContext.Provider
++            value={
++              { conversation: { conversationId: 'chat' } } as React.ContextType<typeof ChatContext>
++            }
++          >
++            <Review name="local_write" approval={approval} toolCallId="call" args={args} />
++            <Probe />
++          </ChatContext.Provider>
++        </ApprovalProvider>
++      </RecoilRoot>
++    </QueryClientProvider>,
++  );
++}
++it('shows the exact before and after, and grants only a single reviewed operation', async () => {
++  mount();
++  expect(await screen.findByText('original')).toBeInTheDocument();
++  expect(screen.getByText('proposed')).toBeInTheDocument();
++  expect(screen.queryByRole('button', { name: /Always allow/i })).not.toBeInTheDocument();
++  expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
++  fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
++  await waitFor(() => expect(screen.getByTestId('decision')).toHaveTextContent('"scope":"once"'));
++  expect(screen.getByTestId('decision')).toHaveTextContent(entry.session!.id);
++  expect(folder.files.get('note.txt')?.writes).toBe(0);
++  fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
++  expect(screen.getByTestId('decision')).not.toHaveTextContent('localFiles');
++});
++it('cannot approve a pending operation in a disconnected tab', async () => {
++  mount();
++  await screen.findByText('original');
++  act(() => setConnection('chat', undefined));
++  expect(await screen.findByRole('alert')).toBeInTheDocument();
++  expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
++  expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled();
++});
++it('renders an actionable failure without exposing malformed arguments or native errors', async () => {
++  mount('{secret invalid JSON');
++  expect(await screen.findByRole('alert')).toBeInTheDocument();
++  expect(screen.queryByText(/secret invalid JSON/)).not.toBeInTheDocument();
++  expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
++});
+diff --git a/client/src/components/Filesystem/__tests__/Tree.test.tsx b/client/src/components/Filesystem/__tests__/Tree.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..dccaca6adc5a83e1f7e64cdfe07311a29674bba0
+--- /dev/null
++++ b/client/src/components/Filesystem/__tests__/Tree.test.tsx
+@@ -0,0 +1,62 @@
++import React from 'react';
++import { webcrypto } from 'node:crypto';
++import { localFilesConfigSchema } from 'librechat-data-provider';
++import { fireEvent, render, screen } from '@testing-library/react';
++import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
++import type { Connection } from '../connection';
++import { DiskFile, DiskFolder } from 'test/filesystem';
++import { Filesystem } from '../engine';
++import Tree from '../Tree';
++
++beforeAll(() =>
++  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto }),
++);
++let client: QueryClient;
++afterEach(() => client.clear());
++function mount(folder: DiskFolder) {
++  client = new QueryClient({
++    logger: { log: () => undefined, warn: () => undefined, error: () => undefined },
++  });
++  const entry: Connection = {
++    owner: 'user',
++    conversationId: 'chat',
++    client,
++    root: { id: crypto.randomUUID(), name: folder.name, access: 'read' },
++    engine: new Filesystem(folder, localFilesConfigSchema.parse({ pageSize: 1 }), {
++      get: async () => undefined,
++      put: async () => undefined,
++    }),
++  };
++  const open = jest.fn();
++  render(
++    <QueryClientProvider client={client}>
++      <Tree entry={entry} onOpen={open} />
++    </QueryClientProvider>,
++  );
++  return open;
++}
++it('browses nested folders and pages without uploading the folder', async () => {
++  const folder = new DiskFolder();
++  const child = new DiskFolder('nested');
++  child.files.set('note.txt', new DiskFile('note.txt'));
++  folder.folders.set(child.name, child);
++  folder.files.set('next.txt', new DiskFile('next.txt'));
++  const open = mount(folder);
++  const expand = await screen.findByRole('button', { name: 'nested' });
++  expect(expand).toHaveAttribute('aria-expanded', 'false');
++  fireEvent.click(expand);
++  fireEvent.click(await screen.findByRole('button', { name: 'note.txt' }));
++  expect(open).toHaveBeenCalledWith('nested/note.txt');
++  fireEvent.click(screen.getByRole('button', { name: /Load more/i }));
++  expect(await screen.findByRole('button', { name: 'next.txt' })).toBeInTheDocument();
++});
++it('shows an empty folder', async () => {
++  mount(new DiskFolder());
++  expect(await screen.findByText(/folder is empty/i)).toBeInTheDocument();
++});
++it('explains a revoked permission without disclosing native diagnostics', async () => {
++  const folder = new DiskFolder();
++  folder.allowed = 'denied';
++  mount(folder);
++  expect(await screen.findByRole('alert')).toHaveTextContent(/permission/i);
++});
+diff --git a/client/src/components/Filesystem/__tests__/connection.spec.ts b/client/src/components/Filesystem/__tests__/connection.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..56b29d6e2e83c59144a8f0befaa8d7f9f89c83f4
+--- /dev/null
++++ b/client/src/components/Filesystem/__tests__/connection.spec.ts
+@@ -0,0 +1,102 @@
++import axios from 'axios';
++import { webcrypto } from 'node:crypto';
++import { QueryClient } from '@tanstack/react-query';
++import { localFilesConfigSchema } from 'librechat-data-provider';
++import type { LocalFilesSession, TPayload } from 'librechat-data-provider';
++import type { Connection } from '../connection';
++import {
++  clearLocalFiles,
++  disconnect,
++  localFilesOwner,
++  setConnection,
++  setLocalFilesOwner,
++  withLocalFiles,
++  startWithLocalFiles,
++} from '../connection';
++import { DiskFolder } from 'test/filesystem';
++import { Filesystem } from '../engine';
++
++const original = axios.defaults.adapter;
++let client: QueryClient;
++let entry: Connection;
++let created: LocalFilesSession;
++let requests: string[];
++beforeAll(() =>
++  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto }),
++);
++beforeEach(() => {
++  client = new QueryClient({
++    logger: { log: () => undefined, warn: () => undefined, error: () => undefined },
++  });
++  const config = localFilesConfigSchema.parse({ enabled: true });
++  const root = { id: crypto.randomUUID(), name: 'workspace', access: 'read' as const };
++  const owner = localFilesOwner({ id: 'user', tenantId: 'tenant' })!;
++  entry = {
++    owner,
++    conversationId: 'new',
++    root,
++    client,
++    stop: jest.fn(async () => undefined),
++    engine: new Filesystem(new DiskFolder(), config, {
++      get: async () => undefined,
++      put: async () => undefined,
++    }),
++  };
++  created = { id: crypto.randomUUID(), token: 'memory-only-token', config, root, version: 1 };
++  requests = [];
++  axios.defaults.adapter = async (config) => {
++    requests.push(`${config.method} ${config.url}`);
++    return {
++      data: config.method === 'delete' ? undefined : created,
++      status: config.method === 'delete' ? 204 : 201,
++      statusText: '',
++      headers: {},
++      config,
++    };
++  };
++  setLocalFilesOwner(owner);
++  setConnection('new', entry);
++});
++afterEach(async () => {
++  clearLocalFiles();
++  await Promise.resolve();
++  axios.defaults.adapter = original;
++  client.clear();
++});
++it('binds one in-memory session to the actual new conversation, even during a duplicate start', async () => {
++  const payload = { conversationId: 'new', clientRequestId: 'request' } as TPayload;
++  const [first, second] = await Promise.all([withLocalFiles(payload), withLocalFiles(payload)]);
++  expect(first.conversationId).toBe(entry.conversationId);
++  expect(second.conversationId).toBe(first.conversationId);
++  expect(first.localFilesSessionId).toBe(created.id);
++  expect(first).not.toHaveProperty('token');
++  expect(requests.filter((value) => value.startsWith('post'))).toHaveLength(1);
++  expect(client.getMutationCache().getAll()).toHaveLength(0);
++});
++it('drops an old account’s authority immediately and isolates the same user ID in different tenants', async () => {
++  expect(localFilesOwner({ id: 'user', tenantId: 'other' })).not.toBe(entry.owner);
++  setLocalFilesOwner(localFilesOwner({ id: 'other', tenantId: 'tenant' }));
++  const payload = { conversationId: 'new' } as TPayload;
++  expect(await withLocalFiles(payload)).toBe(payload);
++  expect(requests).toHaveLength(0);
++  expect(entry.engine.canWrite).toBe(false);
++});
++it('stops the active chat and revokes the server session when disconnected', async () => {
++  await startWithLocalFiles({ conversationId: 'new' } as TPayload, async () => ({
++    generationCreatedAt: 123,
++  }));
++  disconnect(entry);
++  expect(entry.session).toBeUndefined();
++  expect(entry.stop).toHaveBeenCalledWith(entry.conversationId, 123);
++  expect(await withLocalFiles({ conversationId: 'new' } as TPayload)).not.toHaveProperty(
++    'localFilesSessionId',
++  );
++});
++it('stops only the returned job when disconnected before its start response arrives', async () => {
++  await startWithLocalFiles({ conversationId: 'new' } as TPayload, async () => {
++    disconnect(entry);
++    return { generationCreatedAt: 456 };
++  });
++  expect(entry.stop).toHaveBeenCalledTimes(1);
++  expect(entry.stop).toHaveBeenCalledWith(entry.conversationId, 456);
++});
+diff --git a/client/src/components/Filesystem/__tests__/engine.spec.ts b/client/src/components/Filesystem/__tests__/engine.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..47238d8bbb3ce131ea6128f4f3b054aa3648d820
+--- /dev/null
++++ b/client/src/components/Filesystem/__tests__/engine.spec.ts
+@@ -0,0 +1,207 @@
++import { webcrypto } from 'node:crypto';
++import { File as NativeFile } from 'node:buffer';
++import { localFilesConfigSchema, localFilesCommandSchema } from 'librechat-data-provider';
++import type { LocalFilesCommand, LocalFilesInput, LocalFilesResult } from 'librechat-data-provider';
++import type { JournalEntry } from '../engine';
++import { Filesystem, FilesystemError, replacements } from '../engine';
++import { DiskFile, DiskFolder } from 'test/filesystem';
++
++const sessionId = '00000000-0000-4000-8000-000000000001';
++const rootId = '00000000-0000-4000-8000-000000000002';
++function command(input: LocalFilesInput): LocalFilesCommand {
++  return {
++    version: 1,
++    id: crypto.randomUUID(),
++    sessionId,
++    rootId,
++    conversationId: 'chat',
++    runId: 'run',
++    toolCallId: 'call',
++    input,
++    expiresAt: Date.now() + 60000,
++  };
++}
++let folder: DiskFolder;
++let records: Map<string, JournalEntry>;
++let engine: Filesystem;
++beforeAll(() => {
++  Object.defineProperty(globalThis, 'File', { configurable: true, value: NativeFile });
++  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
++  Object.defineProperty(navigator, 'locks', {
++    configurable: true,
++    value: {
++      request: async (_name: string, _options: object, run: () => Promise<LocalFilesResult>) =>
++        run(),
++    },
++  });
++});
++beforeEach(() => {
++  folder = new DiskFolder();
++  folder.files.set('note.txt', new DiskFile('note.txt', 'original'));
++  records = new Map();
++  engine = new Filesystem(folder, localFilesConfigSchema.parse({}), {
++    get: async (id) => records.get(id),
++    put: async (id, value) => {
++      records.set(id, value);
++    },
++  });
++});
++async function reviewed(input: LocalFilesInput): Promise<LocalFilesCommand> {
++  await engine.enable();
++  const proposal = await engine.preview(input, sessionId);
++  return localFilesCommandSchema.parse({
++    ...command(input),
++    review: engine.approve(proposal, 'call'),
++  });
++}
++
++it('reads without a write grant and leaves the disk unchanged', async () => {
++  expect(await engine.inspect({ operation: 'read', path: 'note.txt' })).toEqual({
++    ok: true,
++    value: { path: 'note.txt', content: 'original' },
++  });
++  expect(folder.files.get('note.txt')?.writes).toBe(0);
++});
++it('never changes a file without a locally approved receipt', async () => {
++  await engine.enable();
++  expect(
++    await engine.execute(command({ operation: 'write', path: 'note.txt', content: 'changed' })),
++  ).toEqual({ ok: false, error: { code: 'REVIEW_REQUIRED' } });
++  expect(folder.files.get('note.txt')?.content).toBe('original');
++});
++it('commits the reviewed change exactly once when a stream replays it', async () => {
++  const request = await reviewed({ operation: 'write', path: 'note.txt', content: 'changed' });
++  expect((await engine.execute(request)).ok).toBe(true);
++  expect((await engine.execute(request)).ok).toBe(true);
++  expect(folder.files.get('note.txt')?.writes).toBe(1);
++});
++it('ignores a cancelled command even when cancellation arrived before a replay', async () => {
++  const request = await reviewed({ operation: 'write', path: 'note.txt', content: 'changed' });
++  engine.cancel(request.id, request.expiresAt);
++  expect(await engine.execute(request)).toEqual({ ok: false, error: { code: 'CANCELLED' } });
++  expect(folder.files.get('note.txt')?.writes).toBe(0);
++});
++it('aborts a staged write if another writer changes the file before close', async () => {
++  const request = await reviewed({ operation: 'write', path: 'note.txt', content: 'changed' });
++  const file = folder.files.get('note.txt')!;
++  const create = file.createWritable.bind(file);
++  jest.spyOn(file, 'createWritable').mockImplementation(async () => {
++    const stream = await create();
++    return {
++      ...stream,
++      write: async (value) => {
++        await stream.write(value);
++        file.content = 'external change';
++      },
++    };
++  });
++  expect(await engine.execute(request)).toEqual({ ok: false, error: { code: 'CONFLICT' } });
++  expect(file.content).toBe('external change');
++  expect(file.writes).toBe(0);
++});
++it('cannot apply a receipt to another invocation', async () => {
++  const request = await reviewed({ operation: 'write', path: 'note.txt', content: 'changed' });
++  expect(await engine.execute({ ...request, toolCallId: 'other' })).toEqual({
++    ok: false,
++    error: { code: 'REVIEW_REQUIRED' },
++  });
++});
++it('rejects a modified proposal', async () => {
++  const request = await reviewed({ operation: 'write', path: 'note.txt', content: 'changed' });
++  expect(
++    await engine.execute({
++      ...request,
++      input: { operation: 'write', path: 'note.txt', content: 'unreviewed' },
++    }),
++  ).toEqual({ ok: false, error: { code: 'REVIEW_REQUIRED' } });
++});
++it('rejects a stale file without overwriting a concurrent edit', async () => {
++  const request = await reviewed({ operation: 'write', path: 'note.txt', content: 'changed' });
++  folder.files.get('note.txt')!.content = 'external edit';
++  expect(await engine.execute(request)).toEqual({ ok: false, error: { code: 'CONFLICT' } });
++  expect(folder.files.get('note.txt')?.content).toBe('external edit');
++});
++it.each(['write', 'move'] as const)(
++  'does not overwrite a file created during a %s',
++  async (operation) => {
++    const request = await reviewed(
++      operation === 'write'
++        ? { operation, path: 'new.txt', content: 'proposed' }
++        : { operation, path: 'note.txt', destination: 'new.txt' },
++    );
++    const get = folder.getFileHandle.bind(folder);
++    jest.spyOn(folder, 'getFileHandle').mockImplementation(async (name, options) => {
++      if (name === 'new.txt' && options?.create)
++        folder.files.set(name, new DiskFile(name, 'created externally'));
++      return get(name, options);
++    });
++    expect(await engine.execute(request)).toEqual({ ok: false, error: { code: 'CONFLICT' } });
++    expect(folder.files.get('new.txt')?.content).toBe('created externally');
++    expect(folder.files.get('note.txt')?.content).toBe('original');
++  },
++);
++it('keeps unknown executions from being retried after interruption', async () => {
++  const request = command({ operation: 'write', path: 'note.txt', content: 'changed' });
++  records.set(request.id, { state: 'started' });
++  expect(await engine.execute(request)).toEqual({
++    ok: false,
++    error: { code: 'EXECUTION_UNCERTAIN' },
++  });
++});
++it('retains UTF-8 BOM and CRLF on an edit', async () => {
++  folder.files.get('note.txt')!.content = '\uFEFFfirst\r\nsecond\r\n';
++  const request = await reviewed({
++    operation: 'edit',
++    path: 'note.txt',
++    edits: [{ oldText: 'first\nsecond', newText: 'updated\nsecond' }],
++  });
++  expect((await engine.execute(request)).ok).toBe(true);
++  expect(folder.files.get('note.txt')?.content).toBe('\uFEFFupdated\r\nsecond\r\n');
++});
++it('refuses ambiguous text replacements', () => {
++  expect(() => replacements('same same', [{ oldText: 'same', newText: 'new' }])).toThrow(
++    FilesystemError,
++  );
++});
++it('moves a file only after verifying the new contents', async () => {
++  const request = await reviewed({ operation: 'move', path: 'note.txt', destination: 'moved.txt' });
++  expect((await engine.execute(request)).ok).toBe(true);
++  expect(folder.files.has('note.txt')).toBe(false);
++  expect(
++    await folder.files
++      .get('moved.txt')
++      ?.getFile()
++      .then((file) => file.text()),
++  ).toBe('original');
++});
++it('keeps the source when removal fails', async () => {
++  const request = await reviewed({ operation: 'move', path: 'note.txt', destination: 'moved.txt' });
++  folder.denyRemoval = true;
++  expect(await engine.execute(request)).toEqual({ ok: false, error: { code: 'COPY_RETAINED' } });
++  expect(folder.files.has('note.txt')).toBe(true);
++  expect(folder.files.has('moved.txt')).toBe(true);
++});
++it('does not replace an existing move destination', async () => {
++  folder.files.set('moved.txt', new DiskFile('moved.txt', 'keep'));
++  await expect(
++    engine.preview({ operation: 'move', path: 'note.txt', destination: 'moved.txt' }, sessionId),
++  ).rejects.toMatchObject({ code: 'CONFLICT' });
++});
++it('cancels before committing when the folder disconnects', async () => {
++  const request = await reviewed({ operation: 'write', path: 'note.txt', content: 'changed' });
++  engine.disconnect();
++  expect(await engine.execute(request)).toEqual({ ok: false, error: { code: 'CANCELLED' } });
++  expect(folder.files.get('note.txt')?.content).toBe('original');
++});
++it('refuses revoked permissions and expired operations', async () => {
++  const request = await reviewed({ operation: 'write', path: 'note.txt', content: 'changed' });
++  folder.allowed = 'denied';
++  expect(await engine.execute(request)).toEqual({
++    ok: false,
++    error: { code: 'PERMISSION_DENIED' },
++  });
++  expect(await engine.execute({ ...request, expiresAt: 0 })).toEqual({
++    ok: false,
++    error: { code: 'TIMEOUT' },
++  });
++});
+diff --git a/client/src/components/Filesystem/connection.ts b/client/src/components/Filesystem/connection.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c6d6adba23b4339417860829245d5da7c7b15b53
+--- /dev/null
++++ b/client/src/components/Filesystem/connection.ts
+@@ -0,0 +1,238 @@
++import { z } from 'zod';
++import { atom, createStore, useAtomValue } from 'jotai';
++import {
++  dataService,
++  MutationKeys,
++  QueryKeys,
++  localFilesCommandSchema,
++} from 'librechat-data-provider';
++import type {
++  LocalFilesRoot,
++  LocalFilesSession,
++  TPayload,
++  LocalFilesCommand,
++  LocalFilesResult,
++} from 'librechat-data-provider';
++import type { QueryClient } from '@tanstack/react-query';
++import type { Filesystem } from './engine';
++import { forgetFolders } from './storage';
++
++export interface Connection {
++  owner: string;
++  conversationId: string;
++  root: LocalFilesRoot;
++  engine: Filesystem;
++  client: QueryClient;
++  stop?: (conversationId: string, generationCreatedAt: number) => Promise<unknown>;
++  generationCreatedAt?: number;
++  session?: LocalFilesSession;
++  connecting?: Promise<LocalFilesSession>;
++  firstRequestId?: string;
++  timer?: ReturnType<typeof setInterval>;
++}
++export const connections = atom<ReadonlyMap<string, Connection>>(new Map());
++const store = createStore();
++const clients = new Set<QueryClient>();
++export const useConnections = () => useAtomValue(connections, { store });
++let owner: string | undefined;
++export function localFilesOwner(
++  user: { id?: string; tenantId?: string } | undefined,
++): string | undefined {
++  return user?.id ? JSON.stringify([user.tenantId ?? '', user.id]) : undefined;
++}
++export function setLocalFilesOwner(next: string | undefined): void {
++  if (owner != null && owner !== next) clearLocalFiles();
++  owner = next;
++}
++const items = () => store.get(connections);
++export function setConnection(id: string, entry: Connection | undefined): void {
++  const next = new Map(items());
++  if (entry) {
++    next.set(id, entry);
++    clients.add(entry.client);
++  } else next.delete(id);
++  store.set(connections, next);
++}
++function mutate<T, V>(
++  entry: Connection,
++  key: MutationKeys,
++  mutationFn: (value: V) => Promise<T>,
++  value: V,
++): Promise<T> {
++  const cache = entry.client.getMutationCache();
++  const mutation = cache.build<T, Error, V, void>(entry.client, {
++    mutationKey: [key],
++    mutationFn,
++    variables: value,
++    retry: false,
++  });
++  return mutation.execute().finally(() => cache.remove(mutation));
++}
++export function disconnect(entry: Connection): void {
++  entry.engine.disconnect();
++  if (entry.timer) clearInterval(entry.timer);
++  for (const [id, current] of items()) if (current === entry) setConnection(id, undefined);
++  entry.client.removeQueries({ queryKey: [QueryKeys.localFiles, entry.owner, entry.root.id] });
++  const session = entry.session;
++  entry.session = undefined;
++  if (session) {
++    if (entry.generationCreatedAt != null)
++      void entry.stop?.(entry.conversationId, entry.generationCreatedAt).catch(() => undefined);
++    void mutate(
++      entry,
++      MutationKeys.localFilesSession,
++      dataService.disconnectLocalFiles,
++      session,
++    ).catch(() => undefined);
++  }
++}
++export function clearLocalFiles(): void {
++  const owners = new Set<string>();
++  if (owner) owners.add(owner);
++  owner = undefined;
++  for (const entry of new Set(items().values())) {
++    owners.add(entry.owner);
++    disconnect(entry);
++    entry.client.removeQueries({ queryKey: [QueryKeys.localFiles, entry.owner] });
++  }
++  for (const owner of owners) void forgetFolders(owner).catch(() => undefined);
++  for (const client of clients)
++    for (const owner of owners) client.removeQueries({ queryKey: [QueryKeys.localFiles, owner] });
++  clients.clear();
++  store.set(connections, new Map());
++  if (typeof BroadcastChannel !== 'undefined') {
++    const channel = new BroadcastChannel('librechat-local-files');
++    for (const owner of owners) channel.postMessage({ type: 'logout', owner });
++    channel.close();
++  }
++}
++export function listenLocalFilesLogout(): () => void {
++  if (typeof BroadcastChannel === 'undefined') return () => undefined;
++  const channel = new BroadcastChannel('librechat-local-files');
++  channel.onmessage = (event: MessageEvent<unknown>) => {
++    const message = event.data;
++    if (
++      !message ||
++      typeof message !== 'object' ||
++      !('type' in message) ||
++      message.type !== 'logout' ||
++      !('owner' in message) ||
++      typeof message.owner !== 'string'
++    )
++      return;
++    for (const entry of new Set(items().values()))
++      if (entry.owner === message.owner) disconnect(entry);
++    for (const client of clients)
++      client.removeQueries({ queryKey: [QueryKeys.localFiles, message.owner] });
++    store.set(connections, new Map(items()));
++    void forgetFolders(message.owner).catch(() => undefined);
++  };
++  return () => channel.close();
++}
++async function session(entry: Connection): Promise<LocalFilesSession> {
++  if (entry.session) return entry.session;
++  if (entry.connecting) return entry.connecting;
++  entry.connecting = mutate(
++    entry,
++    MutationKeys.localFilesSession,
++    () => dataService.createLocalFilesSession(entry.conversationId, entry.root),
++    undefined,
++  );
++  try {
++    const created = await entry.connecting;
++    if (![...items().values()].includes(entry)) {
++      await dataService.disconnectLocalFiles(created);
++      throw new Error('Local file connection was closed');
++    }
++    entry.session = created;
++    entry.timer = setInterval(
++      () => {
++        if (!entry.session) return;
++        void mutate(
++          entry,
++          MutationKeys.localFilesSession,
++          dataService.heartbeatLocalFiles,
++          entry.session,
++        ).catch(() => disconnect(entry));
++      },
++      Math.floor(created.config.sessionTtlMs / 3),
++    );
++    return created;
++  } finally {
++    entry.connecting = undefined;
++  }
++}
++/** Called by the app transport, after the composer has created its actual payload. */
++export async function withLocalFiles(payload: TPayload): Promise<TPayload> {
++  const id = payload.conversationId ?? 'new';
++  const entry =
++    items().get(id) ??
++    (payload.clientRequestId
++      ? [...items().values()].find(
++          (candidate) => candidate.firstRequestId === payload.clientRequestId,
++        )
++      : undefined);
++  if (!entry || entry.owner !== owner) return payload;
++  if (entry.conversationId === 'new') {
++    entry.firstRequestId = payload.clientRequestId;
++    entry.conversationId = crypto.randomUUID();
++    setConnection(entry.conversationId, entry);
++  }
++  const bound = await session(entry);
++  return { ...payload, conversationId: entry.conversationId, localFilesSessionId: bound.id };
++}
++const generation = z.object({ generationCreatedAt: z.number().int().positive() });
++/** Capture the job returned by the start request so a late disconnect cannot stop its successor. */
++export async function startWithLocalFiles<T>(
++  payload: TPayload,
++  send: (payload: TPayload) => Promise<T>,
++): Promise<T> {
++  const bound = await withLocalFiles(payload);
++  const entry = bound.localFilesSessionId
++    ? [...items().values()].find((candidate) => candidate.session?.id === bound.localFilesSessionId)
++    : undefined;
++  const result = await send(bound);
++  const parsed = generation.safeParse(result);
++  if (entry && parsed.success) {
++    entry.generationCreatedAt = parsed.data.generationCreatedAt;
++    if (![...items().values()].includes(entry))
++      await entry.stop?.(entry.conversationId, entry.generationCreatedAt).catch(() => undefined);
++  }
++  return result;
++}
++export function adoptLocalFiles(conversationId: string): void {
++  const fresh = items().get('new');
++  if (fresh?.conversationId === conversationId) setConnection('new', undefined);
++}
++export async function receiveLocalFiles(value: LocalFilesCommand): Promise<void> {
++  const parsed = localFilesCommandSchema.safeParse(value);
++  if (!parsed.success) return;
++  const command = parsed.data;
++  const entry = [...items().values()].find(
++    (candidate) => candidate.session?.id === command.sessionId,
++  );
++  if (command.cancelled) {
++    entry?.engine.cancel(command.id, command.expiresAt);
++    return;
++  }
++  if (
++    !entry?.session ||
++    entry.owner !== owner ||
++    entry.root.id !== command.rootId ||
++    entry.conversationId !== command.conversationId ||
++    command.expiresAt <= Date.now()
++  )
++    return;
++  const result: LocalFilesResult = await entry.engine.execute(command);
++  if (![...items().values()].includes(entry)) return;
++  await mutate(
++    entry,
++    MutationKeys.localFilesResult,
++    () => dataService.completeLocalFiles(entry.session!, command.id, result),
++    undefined,
++  );
++  if (result.ok)
++    await entry.client.invalidateQueries({
++      queryKey: [QueryKeys.localFiles, entry.owner, entry.root.id],
++    });
++}
+diff --git a/client/src/components/Filesystem/copy.ts b/client/src/components/Filesystem/copy.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d68b84d3c4c5a73fa1da4c123bbd8df08c980c69
+--- /dev/null
++++ b/client/src/components/Filesystem/copy.ts
+@@ -0,0 +1,22 @@
++import type { LocalFilesResult } from 'librechat-data-provider';
++import type { TranslationKeys } from '~/hooks/useLocalize';
++
++export const errorKeys: Record<
++  Extract<LocalFilesResult, { ok: false }>['error']['code'],
++  TranslationKeys
++> = {
++  UNAVAILABLE: 'com_fs_unavailable',
++  INVALID_REQUEST: 'com_fs_invalid',
++  PERMISSION_DENIED: 'com_fs_permission',
++  NOT_FOUND: 'com_fs_missing',
++  UNSUPPORTED_TEXT: 'com_fs_text_only',
++  TOO_LARGE: 'com_fs_too_large',
++  CONFLICT: 'com_fs_conflict',
++  REVIEW_REQUIRED: 'com_fs_review_required',
++  REVIEW_EXPIRED: 'com_fs_expired',
++  CANCELLED: 'com_fs_cancelled',
++  TIMEOUT: 'com_fs_timeout',
++  EXECUTION_UNCERTAIN: 'com_fs_uncertain',
++  COPY_RETAINED: 'com_fs_copy_retained',
++  FAILED: 'com_fs_failed',
++};
+diff --git a/client/src/components/Filesystem/engine.ts b/client/src/components/Filesystem/engine.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..c3f51d5568a783791c3879e4e7b0605c6ab5fd28
+--- /dev/null
++++ b/client/src/components/Filesystem/engine.ts
+@@ -0,0 +1,451 @@
++import {
++  LocalFilesTransportError,
++  localFilesInputSchema,
++  serializeLocalFiles,
++} from 'librechat-data-provider';
++import type {
++  LocalFilesCommand,
++  LocalFilesConfig,
++  LocalFilesInput,
++  LocalFilesResult,
++  LocalFilesReview,
++} from 'librechat-data-provider';
++
++export interface Writable {
++  write(data: string | Blob): Promise<void>;
++  close(): Promise<void>;
++  abort(): Promise<void>;
++}
++export interface FileHandle {
++  kind: 'file';
++  name: string;
++  getFile(): Promise<File>;
++  createWritable(): Promise<Writable>;
++  isSameEntry(other: FileHandle): Promise<boolean>;
++}
++/** Structural boundary for the browser API, which is not fully declared by lib.dom. */
++export interface Folder {
++  kind: 'directory';
++  name: string;
++  getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<Folder>;
++  getFileHandle(name: string, options?: { create?: boolean }): Promise<FileHandle>;
++  removeEntry(name: string): Promise<void>;
++  values(): AsyncIterableIterator<Folder | FileHandle>;
++  queryPermission(options: { mode: 'read' | 'readwrite' }): Promise<PermissionState>;
++  requestPermission(options: { mode: 'read' | 'readwrite' }): Promise<PermissionState>;
++  isSameEntry(other: Folder): Promise<boolean>;
++}
++export interface JournalEntry {
++  state: 'started' | 'done';
++  result?: LocalFilesResult;
++}
++export interface Journal {
++  get(id: string): Promise<JournalEntry | undefined>;
++  put(id: string, entry: JournalEntry): Promise<void>;
++}
++export interface Preview {
++  input: LocalFilesInput;
++  review: LocalFilesReview;
++  before: string;
++  after: string;
++}
++type Code = Extract<LocalFilesResult, { ok: false }>['error']['code'];
++export class FilesystemError extends Error {
++  constructor(public readonly code: Code) {
++    super(code);
++  }
++}
++export function filesystemError(error: unknown): Code {
++  if (error instanceof LocalFilesTransportError) return error.code;
++  if (error instanceof FilesystemError) return error.code;
++  if (error instanceof DOMException) {
++    if (error.name === 'NotFoundError') return 'NOT_FOUND';
++    if (error.name === 'NotAllowedError' || error.name === 'SecurityError')
++      return 'PERMISSION_DENIED';
++    if (error.name === 'AbortError') return 'CANCELLED';
++    if (error.name === 'TypeMismatchError' || error.name === 'InvalidModificationError')
++      return 'CONFLICT';
++  }
++  return 'FAILED';
++}
++const fail = (code: Code): never => {
++  throw new FilesystemError(code);
++};
++export async function digest(bytes: ArrayBuffer): Promise<string> {
++  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (byte) =>
++    byte.toString(16).padStart(2, '0'),
++  ).join('');
++}
++async function fingerprint(file: File, max: number): Promise<string> {
++  if (file.size > max) return fail('TOO_LARGE');
++  return digest(await file.arrayBuffer());
++}
++async function text(file: File, max: number): Promise<string> {
++  if (file.size > max) return fail('TOO_LARGE');
++  try {
++    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
++      await file.arrayBuffer(),
++    );
++  } catch {
++    return fail('UNSUPPORTED_TEXT');
++  }
++}
++export function replacements(
++  content: string,
++  edits: Extract<LocalFilesInput, { operation: 'edit' }>['edits'],
++): string {
++  const ending = content.includes('\r\n') ? '\r\n' : '\n';
++  let output = content;
++  for (const edit of edits) {
++    const old = edit.oldText.replace(/\r?\n/g, ending);
++    const index = output.indexOf(old);
++    if (index < 0 || output.indexOf(old, index + old.length) >= 0) return fail('CONFLICT');
++    output =
++      output.slice(0, index) +
++      edit.newText.replace(/\r?\n/g, ending) +
++      output.slice(index + old.length);
++  }
++  return output;
++}
++
++export class Filesystem {
++  private readonly grants = new Map<string, { preview: Preview; callId: string }>();
++  private readonly active = new Map<string, Promise<LocalFilesResult>>();
++  private readonly controllers = new Map<string, AbortController>();
++  private readonly cancelled = new Map<string, number>();
++  private readonly controller = new AbortController();
++  private writable = false;
++
++  constructor(
++    readonly folder: Folder,
++    readonly config: LocalFilesConfig,
++    private readonly journal: Journal,
++  ) {}
++
++  disconnect(): void {
++    this.controller.abort();
++    this.grants.clear();
++    this.cancelled.clear();
++  }
++
++  async enable(): Promise<boolean> {
++    // Invoke directly from a click: requesting a browser permission needs user activation.
++    this.writable = (await this.folder.requestPermission({ mode: 'readwrite' })) === 'granted';
++    return this.writable;
++  }
++
++  get canWrite(): boolean {
++    return this.writable && !this.controller.signal.aborted;
++  }
++
++  inspect(
++    input: Extract<LocalFilesInput, { operation: 'list' | 'read' }>,
++  ): Promise<LocalFilesResult> {
++    return this.execute({
++      version: 1,
++      id: crypto.randomUUID(),
++      sessionId: crypto.randomUUID(),
++      rootId: crypto.randomUUID(),
++      conversationId: '',
++      runId: 'preview',
++      toolCallId: 'preview',
++      input,
++      expiresAt: Date.now() + this.config.requestTimeoutMs,
++    });
++  }
++
++  cancel(id: string, expiresAt = Date.now() + this.config.requestTimeoutMs): void {
++    this.cancelled.set(id, expiresAt);
++    this.controllers.get(id)?.abort();
++  }
++
++  private check(expiresAt = Infinity, signal?: AbortSignal): void {
++    if (this.controller.signal.aborted) fail('CANCELLED');
++    if (signal?.aborted) fail('CANCELLED');
++    if (Date.now() >= expiresAt) fail('TIMEOUT');
++  }
++
++  private async parent(path: string): Promise<{ folder: Folder; name: string }> {
++    const parts = path.split('/');
++    const name = parts.pop();
++    if (!name) return fail('INVALID_REQUEST');
++    let folder = this.folder;
++    for (const part of parts) folder = await folder.getDirectoryHandle(part);
++    return { folder, name };
++  }
++
++  private async open(path: string): Promise<FileHandle> {
++    const { folder, name } = await this.parent(path);
++    return folder.getFileHandle(name);
++  }
++
++  private async exists(path: string): Promise<boolean> {
++    const { folder, name } = await this.parent(path);
++    try {
++      await folder.getFileHandle(name);
++      return true;
++    } catch (error) {
++      if (error instanceof DOMException && error.name === 'TypeMismatchError') return true;
++      if (error instanceof DOMException && error.name === 'NotFoundError') return false;
++      throw error;
++    }
++  }
++
++  private async hash(path: string, max: number): Promise<string | null> {
++    try {
++      return await fingerprint(await (await this.open(path)).getFile(), max);
++    } catch (error) {
++      if (error instanceof DOMException && error.name === 'NotFoundError') return null;
++      throw error;
++    }
++  }
++
++  async preview(input: LocalFilesInput, sessionId: string): Promise<Preview> {
++    const parsed = localFilesInputSchema.safeParse(input);
++    if (!parsed.success) return fail('INVALID_REQUEST');
++    input = parsed.data;
++    this.check();
++    if (input.operation === 'read' || input.operation === 'list') return fail('INVALID_REQUEST');
++    const before: LocalFilesReview['before'] = [];
++    let old = '';
++    let after = '';
++    if (input.operation === 'mkdir') {
++      if (await this.exists(input.path)) return fail('CONFLICT');
++      before.push({ path: input.path, hash: null });
++    } else if (input.operation === 'move') {
++      if (await this.exists(input.destination)) return fail('CONFLICT');
++      const hash = await this.hash(input.path, this.config.maxMoveBytes);
++      if (hash == null) return fail('NOT_FOUND');
++      before.push({ path: input.path, hash }, { path: input.destination, hash: null });
++    } else {
++      const hash = await this.hash(input.path, this.config.maxTextBytes);
++      if (input.operation === 'edit' && hash == null) return fail('NOT_FOUND');
++      if (hash != null)
++        old = await text(await (await this.open(input.path)).getFile(), this.config.maxTextBytes);
++      after = input.operation === 'write' ? input.content : replacements(old, input.edits);
++      if (old.startsWith('\uFEFF') && !after.startsWith('\uFEFF')) after = '\uFEFF' + after;
++      if (new TextEncoder().encode(after).byteLength > this.config.maxTextBytes)
++        return fail('TOO_LARGE');
++      before.push({ path: input.path, hash });
++    }
++    const review: LocalFilesReview = {
++      id: crypto.randomUUID(),
++      sessionId,
++      before,
++      digest: await digest(new TextEncoder().encode(serializeLocalFiles(input)).buffer),
++    };
++    return { input, review, before: old, after };
++  }
++
++  approve(preview: Preview, callId: string): LocalFilesReview {
++    this.check();
++    if (!this.canWrite) return fail('PERMISSION_DENIED');
++    this.grants.set(preview.review.id, { preview, callId });
++    return preview.review;
++  }
++
++  revoke(id: string): void {
++    this.grants.delete(id);
++  }
++
++  execute(command: LocalFilesCommand): Promise<LocalFilesResult> {
++    for (const [id, expiresAt] of this.cancelled)
++      if (expiresAt <= Date.now()) this.cancelled.delete(id);
++    if (this.cancelled.has(command.id))
++      return Promise.resolve({ ok: false, error: { code: 'CANCELLED' } });
++    const existing = this.active.get(command.id);
++    if (existing) return existing;
++    const controller = new AbortController();
++    this.controllers.set(command.id, controller);
++    const operation = this.perform(command, controller.signal).catch(
++      (error: unknown): LocalFilesResult => ({
++        ok: false,
++        error: { code: filesystemError(error) },
++      }),
++    );
++    this.active.set(command.id, operation);
++    void operation.finally(() => {
++      this.active.delete(command.id);
++      this.controllers.delete(command.id);
++    });
++    return operation;
++  }
++
++  private async perform(
++    command: LocalFilesCommand,
++    signal: AbortSignal,
++  ): Promise<LocalFilesResult> {
++    this.check(command.expiresAt, signal);
++    const parsed = localFilesInputSchema.safeParse(command.input);
++    if (!parsed.success) return fail('INVALID_REQUEST');
++    const input = parsed.data;
++    if ((await this.folder.queryPermission({ mode: 'read' })) !== 'granted')
++      return fail('PERMISSION_DENIED');
++    if (input.operation === 'read') {
++      const content = await text(
++        await (await this.open(input.path)).getFile(),
++        this.config.maxTextBytes,
++      );
++      this.check(command.expiresAt, signal);
++      return {
++        ok: true,
++        value: {
++          path: input.path,
++          content,
++        },
++      };
++    }
++    if (input.operation === 'list') {
++      let folder = this.folder;
++      if (input.path)
++        for (const part of input.path.split('/')) folder = await folder.getDirectoryHandle(part);
++      const entries: { name: string; kind: 'file' | 'directory' }[] = [];
++      let index = 0;
++      let nextCursor: number | undefined;
++      for await (const entry of folder.values()) {
++        this.check(command.expiresAt, signal);
++        if (index++ < input.cursor) continue;
++        if (entries.length >= this.config.pageSize) {
++          nextCursor = index - 1;
++          break;
++        }
++        entries.push({ name: entry.name, kind: entry.kind });
++      }
++      return {
++        ok: true,
++        value: { path: input.path, entries, ...(nextCursor == null ? {} : { nextCursor }) },
++      };
++    }
++    const previous = await this.journal.get(command.id);
++    if (previous?.state === 'done' && previous.result) return previous.result;
++    if (previous) return fail('EXECUTION_UNCERTAIN');
++    const review = command.review;
++    const grant = review && this.grants.get(review.id);
++    if (
++      !grant ||
++      !review ||
++      grant.callId !== command.toolCallId ||
++      review.sessionId !== command.sessionId ||
++      grant.preview.review.digest !== review.digest ||
++      grant.preview.review.sessionId !== review.sessionId ||
++      grant.preview.review.before.length !== review.before.length ||
++      !review.before.every(
++        (entry, index) =>
++          entry.path === grant.preview.review.before[index]?.path &&
++          entry.hash === grant.preview.review.before[index]?.hash,
++      ) ||
++      review.digest !== (await digest(new TextEncoder().encode(serializeLocalFiles(input)).buffer))
++    )
++      return fail('REVIEW_REQUIRED');
++    this.grants.delete(review.id);
++    if (!this.canWrite || (await this.folder.queryPermission({ mode: 'readwrite' })) !== 'granted')
++      return fail('PERMISSION_DENIED');
++    const commit = async (): Promise<LocalFilesResult> => {
++      for (const expected of review.before) {
++        let current: string | null;
++        if (expected.hash == null) current = (await this.exists(expected.path)) ? 'exists' : null;
++        else
++          current = await this.hash(
++            expected.path,
++            input.operation === 'move' ? this.config.maxMoveBytes : this.config.maxTextBytes,
++          );
++        if (current !== expected.hash) return fail('CONFLICT');
++      }
++      this.check(command.expiresAt, signal);
++      await this.journal.put(command.id, { state: 'started' });
++      const result = await this.commit(
++        input,
++        grant.preview.after,
++        command.expiresAt,
++        signal,
++        review.before,
++      );
++      await this.journal.put(command.id, { state: 'done', result });
++      return result;
++    };
++    if (!navigator.locks) return fail('UNAVAILABLE');
++    return navigator.locks.request(
++      `librechat-local-files:${command.rootId}`,
++      { signal: AbortSignal.any([this.controller.signal, signal]) },
++      commit,
++    );
++  }
++
++  private async commit(
++    input: LocalFilesInput,
++    content: string,
++    expiresAt: number,
++    signal: AbortSignal,
++    before: LocalFilesReview['before'],
++  ): Promise<LocalFilesResult> {
++    const source = await this.parent(input.path);
++    if (input.operation === 'mkdir') {
++      this.check(expiresAt, signal);
++      await source.folder.getDirectoryHandle(source.name, { create: true });
++      return { ok: true, value: { path: input.path } };
++    }
++    if (input.operation === 'move') {
++      const handle = await source.folder.getFileHandle(source.name);
++      const original = await handle.getFile();
++      const hash = await fingerprint(original, this.config.maxMoveBytes);
++      if (hash !== before.find((entry) => entry.path === input.path)?.hash) return fail('CONFLICT');
++      const target = await this.parent(input.destination);
++      this.check(expiresAt, signal);
++      if (await this.exists(input.destination)) return fail('CONFLICT');
++      const destination = await target.folder.getFileHandle(target.name, { create: true });
++      if ((await destination.getFile()).size !== 0) return fail('CONFLICT');
++      const writable = await destination.createWritable();
++      try {
++        await writable.write(original);
++        this.check(expiresAt, signal);
++        if (
++          (await destination.getFile()).size !== 0 ||
++          !(await destination.isSameEntry(await target.folder.getFileHandle(target.name)))
++        )
++          return fail('CONFLICT');
++        await writable.close();
++      } catch (error) {
++        await writable.abort().catch(() => undefined);
++        throw error;
++      }
++      try {
++        this.check(expiresAt, signal);
++        if (
++          (await fingerprint(await destination.getFile(), this.config.maxMoveBytes)) !== hash ||
++          (await fingerprint(await handle.getFile(), this.config.maxMoveBytes)) !== hash ||
++          !(await handle.isSameEntry(await source.folder.getFileHandle(source.name)))
++        )
++          return fail('COPY_RETAINED');
++        await source.folder.removeEntry(source.name);
++      } catch {
++        return { ok: false, error: { code: 'COPY_RETAINED' } };
++      }
++      return { ok: true, value: { path: input.destination } };
++    }
++    if (input.operation !== 'write' && input.operation !== 'edit') return fail('INVALID_REQUEST');
++    this.check(expiresAt, signal);
++    const handle = await source.folder.getFileHandle(source.name, {
++      create: input.operation === 'write',
++    });
++    const expected = before.find((entry) => entry.path === input.path)?.hash;
++    if (expected == null && (await handle.getFile()).size !== 0) return fail('CONFLICT');
++    const writable = await handle.createWritable();
++    try {
++      await writable.write(content);
++      this.check(expiresAt, signal);
++      if (expected == null && (await handle.getFile()).size !== 0) return fail('CONFLICT');
++      if (
++        expected != null &&
++        (await fingerprint(await handle.getFile(), this.config.maxTextBytes)) !== expected
++      )
++        return fail('CONFLICT');
++      if (!(await handle.isSameEntry(await source.folder.getFileHandle(source.name))))
++        return fail('CONFLICT');
++      await writable.close();
++    } catch (error) {
++      await writable.abort().catch(() => undefined);
++      throw error;
++    }
++    return { ok: true, value: { path: input.path } };
++  }
++}
+diff --git a/client/src/components/Filesystem/storage.ts b/client/src/components/Filesystem/storage.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..de6631e3ea6482a80bd40f3734801fd65f57b7ac
+--- /dev/null
++++ b/client/src/components/Filesystem/storage.ts
+@@ -0,0 +1,100 @@
++import type { LocalFilesRoot } from 'librechat-data-provider';
++import type { Folder, Journal, JournalEntry } from './engine';
++
++interface Remembered {
++  root: LocalFilesRoot;
++  folder: Folder;
++}
++function open(): Promise<IDBDatabase> {
++  return new Promise((resolve, reject) => {
++    const request = indexedDB.open('librechat-local-files', 1);
++    request.onupgradeneeded = () => request.result.createObjectStore('records');
++    request.onsuccess = () => resolve(request.result);
++    request.onerror = () => reject(new Error('Local file storage is unavailable'));
++  });
++}
++async function read<T>(key: string): Promise<T | undefined> {
++  const db = await open();
++  try {
++    return await new Promise<T | undefined>((resolve, reject) => {
++      const transaction = db.transaction('records', 'readonly');
++      const request: IDBRequest<T | undefined> = transaction.objectStore('records').get(key);
++      request.onsuccess = () => resolve(request.result);
++      request.onerror = () => reject(new Error('Local file storage is unavailable'));
++    });
++  } finally {
++    db.close();
++  }
++}
++async function put(key: string, value: Remembered | JournalEntry): Promise<void> {
++  const db = await open();
++  try {
++    await new Promise<void>((resolve, reject) => {
++      const transaction = db.transaction('records', 'readwrite');
++      transaction.objectStore('records').put(value, key);
++      transaction.oncomplete = () => resolve();
++      transaction.onabort = transaction.onerror = () =>
++        reject(new Error('Local file storage is unavailable'));
++    });
++  } finally {
++    db.close();
++  }
++}
++export const recallFolder = (owner: string) => read<Remembered>(`${owner}:folder`);
++export const rememberFolder = (owner: string, value: Remembered) => put(`${owner}:folder`, value);
++/** A shared registry gives the same physical folder one write lock across tabs. */
++export async function registerFolder(owner: string, folder: Folder): Promise<LocalFilesRoot> {
++  return navigator.locks.request(`librechat-local-folders:${owner}`, async () => {
++    const db = await open();
++    let roots: Remembered[];
++    try {
++      roots = await new Promise<Remembered[]>((resolve, reject) => {
++        const transaction = db.transaction('records', 'readonly');
++        const prefix = `${owner}:root:`;
++        const request: IDBRequest<Remembered[]> = transaction
++          .objectStore('records')
++          .getAll(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
++        request.onsuccess = () => resolve(request.result);
++        request.onerror = () => reject(new Error('Local file storage is unavailable'));
++      });
++    } finally {
++      db.close();
++    }
++    for (const entry of roots) {
++      if (await folder.isSameEntry(entry.folder)) {
++        const root = { ...entry.root, access: 'read' as const };
++        await rememberFolder(owner, { root, folder });
++        return root;
++      }
++    }
++    const root: LocalFilesRoot = { id: crypto.randomUUID(), name: folder.name, access: 'read' };
++    await put(`${owner}:root:${root.id}`, { root, folder });
++    await rememberFolder(owner, { root, folder });
++    return root;
++  });
++}
++export const localJournal = (owner: string): Journal => ({
++  get: (id) => read<JournalEntry>(`${owner}:operation:${id}`),
++  put: (id, value) => put(`${owner}:operation:${id}`, value),
++});
++export async function forgetFolders(owner: string): Promise<void> {
++  const db = await open();
++  try {
++    await new Promise<void>((resolve, reject) => {
++      const transaction = db.transaction('records', 'readwrite');
++      const request = transaction.objectStore('records').openKeyCursor();
++      request.onsuccess = () => {
++        const cursor = request.result;
++        if (!cursor) return;
++        if (typeof cursor.key === 'string' && cursor.key.startsWith(`${owner}:`))
++          transaction.objectStore('records').delete(cursor.key);
++        cursor.continue();
++      };
++      transaction.oncomplete = () => resolve();
++      transaction.onabort = transaction.onerror = () =>
++        reject(new Error('Local file storage is unavailable'));
++    });
++  } finally {
++    db.close();
++  }
++}
+diff --git a/client/src/components/Messages/Content/Error/ModelError.tsx b/client/src/components/Messages/Content/Error/ModelError.tsx
+index 69575ade1348bb6fb2b4afdec946a0d298b25b90..8f9780f0a0ecb77f0e74fe7a72c06d48899bdcca 100644
+--- a/client/src/components/Messages/Content/Error/ModelError.tsx
++++ b/client/src/components/Messages/Content/Error/ModelError.tsx
+@@ -56,6 +56,8 @@ export default function ModelError({ json, message }: ErrorRendererProps) {
+       : localize('com_error_code_workspace_unavailable');
+   }
+ 
++  if (errorKey === ErrorTypes.LOCAL_FILES_UNAVAILABLE) return localize('com_fs_unavailable');
++
+   /**
+    * Provider-neutral headline, matching the sentence the server persists as the failure's own
+    * text. The provider's own message rides along in `message` when the deployment lets provider
+diff --git a/client/src/components/Messages/Content/Error/registry.ts b/client/src/components/Messages/Content/Error/registry.ts
+index b1aff2c30b6a92809f56ecf9744401247c25ba0b..c767c347215a6061708ff3c0c66a8fef1e6326d8 100644
+--- a/client/src/components/Messages/Content/Error/registry.ts
++++ b/client/src/components/Messages/Content/Error/registry.ts
+@@ -24,6 +24,7 @@ export const errorRenderers: Record<string, ComponentType<ErrorRendererProps>> =
+   [ErrorTypes.ENDPOINT_MODELS_NOT_LOADED]: ModelError,
+   [ErrorTypes.UPSTREAM_MODEL_ERROR]: ModelError,
+   [ErrorTypes.CODE_WORKSPACE_UNAVAILABLE]: ModelError,
++  [ErrorTypes.LOCAL_FILES_UNAVAILABLE]: ModelError,
+   [ViolationTypes.ILLEGAL_MODEL_REQUEST]: ModelError,
+   [ErrorTypes.REFUSAL]: ProviderError,
+   [ErrorTypes.GOOGLE_ERROR]: ProviderError,
+diff --git a/client/src/hooks/AuthContext.tsx b/client/src/hooks/AuthContext.tsx
+index 970fbc30e6f0dff44944d4dfbafa2630f4ee3944..f953caaf735c82e645eb58386d8c4228723d757c 100644
+--- a/client/src/hooks/AuthContext.tsx
++++ b/client/src/hooks/AuthContext.tsx
+@@ -46,6 +46,12 @@ import {
+   useLogoutUserMutation,
+   useRefreshTokenMutation,
+ } from '~/data-provider';
++import {
++  clearLocalFiles,
++  setLocalFilesOwner,
++  localFilesOwner,
++  listenLocalFilesLogout,
++} from '~/components/Filesystem/connection';
+ import { resetChatFilterSessionAtom } from '~/components/Conversations/chatFilters';
+ import { TAuthConfig, TUserContext, TAuthContext, TResError } from '~/common';
+ import { resetFacetsAtom } from '~/components/Conversations/facets';
+@@ -66,6 +72,7 @@ if (import.meta.hot) {
+  * that reliably sees the transition. Both are cleared together so neither can be added to an exit
+  * path the other was wired into. */
+ const endSessionClientState = (): void => {
++  clearLocalFiles();
+   getDefaultStore().set(resetChatFilterSessionAtom);
+   getDefaultStore().set(resetMCPStateAtom);
+   getDefaultStore().set(resetFacetsAtom);
+@@ -123,6 +130,11 @@ const AuthContextProvider = ({
+   const isExternalRedirectRef = useRef(false);
+   const prerenderRefreshDeferredRef = useRef(false);
+   const [user, setUser] = useRecoilState(store.user);
++  const fileOwner = localFilesOwner(user);
++  useEffect(listenLocalFilesLogout, []);
++  useEffect(() => {
++    setLocalFilesOwner(fileOwner);
++  }, [fileOwner]);
+   const logoutRedirectRef = useRef<string | undefined>(undefined);
+   const [token, setToken] = useState<string | undefined>(undefined);
+   const [error, setError] = useState<string | undefined>(undefined);
+@@ -142,6 +154,7 @@ const AuthContextProvider = ({
+     () =>
+       debounce((userContext: TUserContext) => {
+         const { token, isAuthenticated, user, redirect } = userContext;
++        setLocalFilesOwner(isAuthenticated ? localFilesOwner(user) : undefined);
+         setUser(user);
+         setToken(token);
+         setTokenHeader(token);
+@@ -271,6 +284,7 @@ const AuthContextProvider = ({
+ 
+   const logout = useCallback(
+     (redirect?: string) => {
++      clearLocalFiles();
+       clearPostLoginRedirect();
+       clearTwoFactorSetupToken();
+       if (redirect) {
+diff --git a/client/src/hooks/Nav/useSideNavLinks.ts b/client/src/hooks/Nav/useSideNavLinks.ts
+index b6b32f9fc7771a5f5d06d3aad421aca34cd70af8..8262363aa1a67ea82852d458f7b3ff3c63c41fc2 100644
+--- a/client/src/hooks/Nav/useSideNavLinks.ts
++++ b/client/src/hooks/Nav/useSideNavLinks.ts
+@@ -2,6 +2,7 @@ import { useMemo } from 'react';
+ import { MCPIcon, OpenAIMinimalIcon } from '@librechat/client';
+ import {
+   Bot,
++  FolderOpen,
+   Brain,
+   Bookmark,
+   NotebookPen,
+@@ -26,6 +27,7 @@ import {
+   useGetAgentsConfig,
+   useHasAccess,
+ } from '~/hooks';
++import { useGetStartupConfig } from '~/data-provider/Endpoints';
+ import { PromptsAccordion } from '~/components/Prompts';
+ import { SkillsAccordion } from '~/components/Skills';
+ import { lazyWithRecovery } from '~/lib/assets/lazy';
+@@ -46,6 +48,7 @@ const SchedulePanel = lazyWithRecovery(
+ );
+ const Parameters = lazyWithRecovery(() => import('~/components/SidePanel/Parameters/Panel'));
+ const MemoryPanel = lazyWithRecovery(() => import('~/components/SidePanel/Memories/MemoryPanel'));
++const FilesystemPanel = lazyWithRecovery(() => import('~/components/Filesystem/Panel'));
+ 
+ export default function useSideNavLinks({
+   hidePanel,
+@@ -105,12 +108,23 @@ export default function useSideNavLinks({
+     permission: Permissions.USE,
+   });
+   const { availableMCPServers } = useMCPServerManager();
++  const { data: startup } = useGetStartupConfig();
++  const filesEnabled = startup?.localFiles?.enabled === true;
+ 
+   const { agentsConfig } = useGetAgentsConfig({ endpointsConfig });
+   const { skillsEnabled } = useAgentCapabilities(agentsConfig?.capabilities);
+ 
+   const Links = useMemo(() => {
+     const links: NavLink[] = [];
++    if (filesEnabled && !isAssistantsEndpoint(endpointType ?? endpoint)) {
++      links.push({
++        title: 'com_fs_title',
++        label: '',
++        icon: FolderOpen,
++        id: 'local-files',
++        Component: FilesystemPanel,
++      });
++    }
+ 
+     if (
+       endpointsConfig?.[EModelEndpoint.agents] &&
+@@ -247,6 +261,7 @@ export default function useSideNavLinks({
+     return links;
+   }, [
+     endpoint,
++    filesEnabled,
+     endpointsConfig,
+     keyProvided,
+     hasAccessToAgents,
+diff --git a/client/src/hooks/SSE/events.ts b/client/src/hooks/SSE/events.ts
+index a587388bd629b05d4d070db5c2f050f06cafbc34..4e78aade248f3626667388f7390906b7bfe5a617 100644
+--- a/client/src/hooks/SSE/events.ts
++++ b/client/src/hooks/SSE/events.ts
+@@ -12,6 +12,7 @@ import type { ResumableRun, ResumableEvents, ResumableUsage } from '@librechat/c
+ import type { EventHandlerParams } from '@librechat/chat/react';
+ import type { EventSubmission } from 'librechat-data-provider';
+ import type { TResData, TFinalResData } from '~/common';
++import { receiveLocalFiles, adoptLocalFiles } from '~/components/Filesystem/connection';
+ import { markStreamStartFailedMetadata } from '~/utils';
+ import { reopenTermsOnRefusal } from '~/utils/terms';
+ import useLocalize from '~/hooks/useLocalize';
+@@ -117,7 +118,13 @@ export default function useResumableEvents({
+         });
+       },
+       finalHandler: (data, finalSubmission) => finalHandler(data as TFinalResData, finalSubmission),
+-      createdHandler,
++      localFileHandler: (command) => {
++        void receiveLocalFiles(command).catch(() => undefined);
++      },
++      createdHandler: (data, ...rest) => {
++        if (data.message.conversationId) adoptLocalFiles(data.message.conversationId);
++        createdHandler(data, ...rest);
++      },
+       attachmentHandler,
+       titleHandler,
+       contentHandler,
+diff --git a/client/src/lib/rum/privacy.spec.ts b/client/src/lib/rum/privacy.spec.ts
+index b6799c20ec5460d6de21f3b99d719f743ae6cd8a..419cc2c41e0c749e793165b6c488a7c265ca73a2 100644
+--- a/client/src/lib/rum/privacy.spec.ts
++++ b/client/src/lib/rum/privacy.spec.ts
+@@ -224,6 +224,7 @@ it.each(['request', 'response'])(
+       'X_HDX_API_KEY',
+       'token',
+       'x-access-token',
++      'X-Local-Files-Token',
+       'X_Refresh_Token',
+       'x-amz-security-token',
+       'signature',
+@@ -265,6 +266,10 @@ it('checks header names before URL redaction and preserves ordinary attributes',
+ 
+ it.each([
+   '/api/auth/login',
++  '/api/local-files/sessions',
++  '/api/local-files/sessions/session-123/heartbeat',
++  '/api/local-files/sessions/session-123/results/request-123',
++  '/app/api/local-files/sessions/session-123',
+   '/api/auth/register',
+   '/api/auth/refresh',
+   '/api/auth/resetPassword',
+diff --git a/client/src/lib/rum/privacy.ts b/client/src/lib/rum/privacy.ts
+index 1ffc58d036bb16980df41db964bf0fca73cab77d..fbfb1027264232f8c5bc8e18ef4b9625f89bbfe3 100644
+--- a/client/src/lib/rum/privacy.ts
++++ b/client/src/lib/rum/privacy.ts
+@@ -21,6 +21,7 @@ const HEADER_SPAN_ATTRIBUTE = /^http\.(?:request|response)\.header\.(.+)$/i;
+ const CREDENTIAL_HEADER = /authorization|cookie|apikey|token|signature/i;
+ const BODY_SPAN_ATTRIBUTE = /^http\.(?:request|response)\.body$/i;
+ const CREDENTIAL_ROUTES = [
++  /\/api\/local-files(?:\/|$)/i,
+   /\/oauth\/(?:google|facebook|openid|github|discord|apple|saml)(?:\/callback)?\/?$/i,
+   /\/api\/(?:auth|keys|api-keys)(?:\/|$)/i,
+   /\/api\/user\/(?:verify|email)(?:\/|$)/i,
+diff --git a/client/src/locales/en/translation.json b/client/src/locales/en/translation.json
+index d09e199cdfe5e8c6cf6228d161dc4b2f0288af40..cfbb021a9d782077724eea28a47175c2d3562fd7 100644
+--- a/client/src/locales/en/translation.json
++++ b/client/src/locales/en/translation.json
+@@ -1,4 +1,38 @@
+ {
++  "com_fs_title": "Local folder",
++  "com_fs_description": "Connect a folder on this computer. Previews stay in your browser. Files the assistant reads are sent to your model and saved in this chat.",
++  "com_fs_choose": "Choose folder",
++  "com_fs_reconnect": "Reconnect previous folder",
++  "com_fs_disconnect": "Disconnect folder",
++  "com_fs_refresh": "Refresh files",
++  "com_fs_enable_write": "Enable changes with review",
++  "com_fs_read_only": "Read only",
++  "com_fs_review_changes": "Every change requires review",
++  "com_fs_browser": "Direct folder access requires Chrome or Edge on desktop, using HTTPS or localhost.",
++  "com_fs_approval_disabled": "Your administrator must enable tool approval before local folders can connect.",
++  "com_fs_files": "Files and folders",
++  "com_fs_empty": "This folder is empty.",
++  "com_fs_preview": "Local file preview",
++  "com_fs_review_title": "Review the change to your local files",
++  "com_fs_before": "Current contents",
++  "com_fs_after": "Proposed contents",
++  "com_fs_once": "Approval applies to this exact change once. If the file changes, review it again.",
++  "com_fs_original_tab": "Review this operation in the browser tab connected to the folder. After reloading, reconnect and start the request again.",
++  "com_fs_move_notice": "This move copies and verifies the file before removing the source. It is not atomic. If removal fails, both copies remain.",
++  "com_fs_unavailable": "The folder connection is unavailable. Reconnect and start the request again.",
++  "com_fs_invalid": "Choose a relative path inside the connected folder.",
++  "com_fs_permission": "Folder permission is missing. Reconnect or enable changes in the Local folder panel.",
++  "com_fs_missing": "The file or its parent folder no longer exists. Refresh the file list.",
++  "com_fs_text_only": "Only UTF-8 text and code files can be previewed or edited.",
++  "com_fs_too_large": "This file exceeds the size limit configured by your administrator.",
++  "com_fs_conflict": "The file changed or the destination already exists. Refresh and review a new proposal.",
++  "com_fs_review_required": "This change needs a one-time review in the folder-owning browser tab.",
++  "com_fs_expired": "This review expired. Request a new proposal.",
++  "com_fs_cancelled": "The file operation was cancelled.",
++  "com_fs_timeout": "The folder did not respond in time. Check its contents before requesting another change.",
++  "com_fs_uncertain": "The previous operation was interrupted and its outcome is uncertain. Inspect the files before reviewing another proposal.",
++  "com_fs_copy_retained": "The destination was copied, but the source was retained. Inspect both files before continuing.",
++  "com_fs_failed": "The file operation failed. Check the folder and try a new request.",
+   "com_ui_agent_actions": "Agent actions",
+   "com_ui_chat_target_failed": "Unable to load this chat’s model or agent.",
+   "com_ui_remove": "Remove",
+diff --git a/client/test/filesystem.ts b/client/test/filesystem.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a08848e7de3cc09dae633b8e728c2e34b8b3f7b4
+--- /dev/null
++++ b/client/test/filesystem.ts
+@@ -0,0 +1,84 @@
++import type { FileHandle, Folder, Writable } from '../src/components/Filesystem/engine';
++
++export class DiskFile implements FileHandle {
++  readonly kind = 'file';
++  writes = 0;
++  constructor(
++    readonly name: string,
++    public content: string | Uint8Array<ArrayBuffer> = '',
++  ) {}
++
++  async getFile(): Promise<File> {
++    return new File([this.content], this.name);
++  }
++
++  async isSameEntry(other: FileHandle): Promise<boolean> {
++    return this === other;
++  }
++
++  async createWritable(): Promise<Writable> {
++    let pending: string | Blob = '';
++    return {
++      write: async (value) => {
++        pending = value;
++      },
++      close: async () => {
++        this.content =
++          typeof pending === 'string' ? pending : new Uint8Array(await pending.arrayBuffer());
++        this.writes++;
++      },
++      abort: async () => undefined,
++    };
++  }
++}
++export class DiskFolder implements Folder {
++  readonly kind = 'directory';
++  readonly files = new Map<string, DiskFile>();
++  readonly folders = new Map<string, DiskFolder>();
++  allowed: PermissionState = 'granted';
++  denyRemoval = false;
++  constructor(readonly name = 'workspace') {}
++  async getFileHandle(name: string, options?: { create?: boolean }): Promise<DiskFile> {
++    if (this.folders.has(name)) throw new DOMException('', 'TypeMismatchError');
++    let file = this.files.get(name);
++    if (!file && options?.create) {
++      file = new DiskFile(name);
++      this.files.set(name, file);
++    }
++    if (!file) throw new DOMException('', 'NotFoundError');
++    return file;
++  }
++
++  async getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<DiskFolder> {
++    if (this.files.has(name)) throw new DOMException('', 'TypeMismatchError');
++    let folder = this.folders.get(name);
++    if (!folder && options?.create) {
++      folder = new DiskFolder(name);
++      this.folders.set(name, folder);
++    }
++    if (!folder) throw new DOMException('', 'NotFoundError');
++    return folder;
++  }
++
++  async removeEntry(name: string): Promise<void> {
++    if (this.denyRemoval) throw new DOMException('', 'NotAllowedError');
++    this.files.delete(name);
++  }
++
++  async *values() {
++    yield* this.folders.values();
++    yield* this.files.values();
++  }
++
++  async queryPermission() {
++    return this.allowed;
++  }
++
++  async requestPermission() {
++    return this.allowed;
++  }
++
++  async isSameEntry(other: Folder) {
++    return other === this;
++  }
++}
+diff --git a/docs/local-files.md b/docs/local-files.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..61bdd9f077d25f853cc73acb4f45cd580c349973
+--- /dev/null
++++ b/docs/local-files.md
+@@ -0,0 +1,81 @@
++# Browser local folders
++
++Local folders let a signed-in user connect a folder on their own computer to a chat.
++The browser performs the file operations. Docker does not need a host bind mount, and
++the application server never receives filesystem handles or opens a local host path.
++
++Enable the feature after every serving replica has upgraded:
++
++```yaml
++localFiles:
++  enabled: true
++  maxTextBytes: 1048576
++  maxMoveBytes: 16777216
++  pageSize: 200
++  requestTimeoutMs: 60000
++  sessionTtlMs: 60000
++
++endpoints:
++  agents:
++    toolApproval:
++      enabled: true
++```
++
++Keep your existing tool policy. A built-in policy asks for every local write, edit, directory
++creation, and move. Remembered approvals never grant local disk writes. Explicit
++administrator deny rules remain authoritative, including under `mode: bypass`.
++Local folders are off by default.
++
++Build this checkout with `npm run frontend` before starting the server. For Docker,
++build a local image containing these changes; the standard prebuilt image does not
++contain an unmerged feature. Merge this fragment into `docker-compose.override.yaml`
++and run `docker compose up -d --build` with your normal `.env` and model credentials:
++
++```yaml
++services:
++  api:
++    image: librechat-local-files:local
++    build:
++      context: .
++      dockerfile: Dockerfile
++    volumes:
++      - ./librechat.yaml:/app/librechat.yaml:ro
++```
++
++Use Chrome or Edge on desktop over HTTPS or localhost. Open **Local folder**, choose
++a test folder, and optionally select **Enable changes with review** before sending a
++turn. The initial connection is read only. Each chat has one active folder. The tools
++belong to the main interactive chat agent; unattended and API-only runs cannot use them.
++
++Expand directories to browse their contents and select a file for a local preview.
++Only UTF-8 text and code can be read or edited. Previews remain local. Content read by
++the assistant enters the normal model request and chat history; connecting a folder
++does not upload or index the folder. Other files may be listed and moved.
++
++Before changing a file, review its current and proposed contents in the connected tab.
++A review binds the operation, paths, connection, and current file hashes. Changed files
++need a new proposal. Local writes cannot use "Always allow". Moves copy and verify one
++file before removing its source, never overwrite a destination, and are not atomic.
++A failed removal leaves both copies. Directory moves, standalone deletion, shell
++execution, PDF/Office extraction, and unsupported browsers are outside this version.
++
++Disconnecting or replacing a connected folder stops its active chat run. The browser
++remembers selected folder handles in account-scoped IndexedDB and offers the last
++folder for reconnecting. Reusing a folder shares its write lock across tabs. Reloading
++requires an explicit reconnect, and pending writes are never replayed automatically.
++Logout disconnects all this account's tabs and removes its remembered handles. A small
++local operation journal prevents duplicate disk writes; an interrupted execution whose
++outcome is unknown requires inspection, rather than an automatic retry. Browser grants
++are origin-wide: using another local application to edit the same files can still race
++with an approved operation; the browser API does not provide a cross-application file
++transaction or lock.
++
++The session token travels in `X-Local-Files-Token`, stays in memory, and is never included
++in model messages or SSE events. File-operation HTTP bodies and the token header are
++excluded from RUM. The feature adds no file scans or network requests while disabled.
++
++The complete browser test uses real OPFS file handles as the picker boundary, the
++real Express server and resumable chat, a disposable MongoDB, and a deterministic
++model. After building, run `npx playwright test --config=e2e/playwright.config.filesystem.ts`.
++Set `E2E_CHROMIUM_CHANNEL=chrome` to use an installed Chrome. Native handle and
++telemetry tests run with `npx playwright test --config=e2e/playwright.config.rum.ts`.
+diff --git a/e2e/filesystem/chat.spec.ts b/e2e/filesystem/chat.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e7ca19e8bd2d22c5d1d7ae9b1126d6f0d53715d1
+--- /dev/null
++++ b/e2e/filesystem/chat.spec.ts
+@@ -0,0 +1,81 @@
++import { test, expect } from '@playwright/test';
++import { messagesView } from '../specs/mock/helpers';
++import { collapseComposerApproval } from '../specs/mock/approvals.helpers';
++
++test('connects a read-only folder, then requires one-time review before the real chat writes', async ({
++  page,
++}) => {
++  await page.addInitScript(() => {
++    Object.defineProperty(window, 'showDirectoryPicker', {
++      configurable: true,
++      value: async () => {
++        const root = await navigator.storage.getDirectory();
++        const folder = await root.getDirectoryHandle('local-chat-test', { create: true });
++        const file = await folder.getFileHandle('note.txt', { create: true });
++        const writable = await file.createWritable();
++        await writable.write('local original');
++        await writable.close();
++        return Object.assign(folder, {
++          queryPermission: async () => 'granted',
++          requestPermission: async () => 'granted',
++        });
++      },
++    });
++  });
++  await page.goto('/c/new');
++  // The shared authentication fixture opens the sidebar.
++  const folderTab = page.getByRole('button', { name: 'Local folder', exact: true });
++  await expect(folderTab).toBeVisible();
++  await folderTab.click();
++  await page.getByRole('button', { name: 'Choose folder', exact: true }).click();
++  await expect(page.getByText('Read only', { exact: true })).toBeVisible();
++  await page.getByRole('button', { name: 'note.txt', exact: true }).click();
++  await expect(page.getByText('local original', { exact: true })).toBeVisible();
++  const composer = page.locator('#prompt-textarea');
++  const delivered = page.waitForRequest(
++    (request) =>
++      request.method() === 'POST' &&
++      /\/api\/local-files\/sessions\/[^/]+\/results\//.test(new URL(request.url()).pathname),
++    { timeout: 15000 },
++  );
++  await composer.fill('LOCAL_READ');
++  await composer.press('Enter');
++  expect((await delivered).postDataJSON()).toEqual({
++    ok: true,
++    value: { path: 'note.txt', content: 'local original' },
++  });
++  await expect(messagesView(page)).toContainText('Local file operation complete.');
++  await page.getByRole('button', { name: 'Enable changes with review', exact: true }).click();
++  await composer.fill('LOCAL_WRITE');
++  await composer.press('Enter');
++  await collapseComposerApproval(page);
++  await expect(page.getByText('Proposed contents', { exact: true })).toBeVisible();
++  await expect(page.getByText('reviewed by the owner', { exact: true }).first()).toBeVisible();
++  expect(
++    await page.evaluate(async () =>
++      (
++        await (
++          await (await navigator.storage.getDirectory()).getDirectoryHandle('local-chat-test')
++        ).getFileHandle('note.txt')
++      )
++        .getFile()
++        .then((file) => file.text()),
++    ),
++  ).toBe('local original');
++  const approve = page.getByRole('button', { name: 'Approve', exact: true });
++  await approve.click();
++  await page.getByRole('button', { name: 'Submit', exact: true }).click();
++  await expect
++    .poll(() =>
++      page.evaluate(async () =>
++        (
++          await (
++            await (await navigator.storage.getDirectory()).getDirectoryHandle('local-chat-test')
++          ).getFileHandle('note.txt')
++        )
++          .getFile()
++          .then((file) => file.text()),
++      ),
++    )
++    .toBe('reviewed by the owner');
++});
+diff --git a/e2e/filesystem/librechat.yaml b/e2e/filesystem/librechat.yaml
+new file mode 100644
+index 0000000000000000000000000000000000000000..ba2e4b7603da3e4708cb2996912030913fb5b16a
+--- /dev/null
++++ b/e2e/filesystem/librechat.yaml
+@@ -0,0 +1,12 @@
++version: 1.3.19
++cache: true
++localFiles:
++  enabled: true
++  requestTimeoutMs: 10000
++endpoints:
++  openAI:
++    titleConvo: false
++  agents:
++    toolApproval:
++      enabled: true
++      mode: bypass
+diff --git a/e2e/playwright.config.filesystem.ts b/e2e/playwright.config.filesystem.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b85c99d082e62ab10cd729becd156b997f96a047
+--- /dev/null
++++ b/e2e/playwright.config.filesystem.ts
+@@ -0,0 +1,29 @@
++import path from 'node:path';
++import { defineConfig } from '@playwright/test';
++import mockConfig from './playwright.config.mock';
++
++const servers = (Array.isArray(mockConfig.webServer) ? mockConfig.webServer : []).filter((server) =>
++  server.command.endsWith('start-server.js'),
++);
++if (servers.length !== 1) throw new Error('Local files tests require E2E_REPLICAS=1.');
++export default defineConfig({
++  ...mockConfig,
++  testDir: 'filesystem',
++  outputDir: 'filesystem/.test-results',
++  timeout: 120_000,
++  retries: 0,
++  reporter: 'line',
++  webServer: servers.map((server) => ({
++    ...server,
++    env: {
++      ...server.env,
++      CONFIG_PATH: path.resolve(__dirname, 'filesystem/librechat.yaml'),
++      ENDPOINTS: 'openAI,agents',
++      OPENAI_MODELS: 'gpt-4o-mini',
++      OPENAI_API_KEY: 'sk-e2e-local-files-placeholder',
++      ASSISTANTS_API_KEY: '',
++      E2E_USE_MEMORY_MONGO: 'true',
++      LIBRECHAT_TEST_RUN_HOOK: path.resolve(__dirname, 'setup/local-files-model.cjs'),
++    },
++  })),
++});
+diff --git a/e2e/playwright.config.rum.ts b/e2e/playwright.config.rum.ts
+index 9802e6e8ceeca7521001810ee09847b87c2136ae..7d5715b003b69fc119530e603b855dfad14f176e 100644
+--- a/e2e/playwright.config.rum.ts
++++ b/e2e/playwright.config.rum.ts
+@@ -7,5 +7,5 @@ export default defineConfig({
+   retries: 0,
+   timeout: 60_000,
+   reporter: 'line',
+-  use: { headless: true, trace: 'off' },
++  use: { headless: true, trace: 'off', channel: process.env.E2E_CHROMIUM_CHANNEL },
+ });
+diff --git a/e2e/rum/local-files.spec.ts b/e2e/rum/local-files.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..0bffa7bcf98cff51f1a23e17db3824c2a08a87e5
+--- /dev/null
++++ b/e2e/rum/local-files.spec.ts
+@@ -0,0 +1,178 @@
++import { build } from 'vite';
++import { resolve } from 'node:path';
++import { test, expect } from '@playwright/test';
++import type * as Fixture from '../setup/local-files';
++import type { Folder, JournalEntry } from '../../client/src/components/Filesystem/engine';
++import type { LocalFilesCommand } from '../../packages/data-provider/src/filesystem';
++
++declare global {
++  interface Window {
++    LocalFilesFixture: typeof Fixture;
++  }
++}
++let bundle: string;
++test.beforeAll(async () => {
++  const output = await build({
++    configFile: false,
++    logLevel: 'silent',
++    build: {
++      write: false,
++      minify: false,
++      lib: {
++        entry: resolve(__dirname, '../setup/local-files.ts'),
++        name: 'LocalFilesFixture',
++        formats: ['iife'],
++      },
++    },
++  });
++  const result = Array.isArray(output) ? output[0] : output;
++  if (!('output' in result)) throw new Error('Expected a browser fixture bundle');
++  const chunk = result.output.find((item) => item.type === 'chunk');
++  if (!chunk || chunk.type !== 'chunk') throw new Error('Expected fixture JavaScript');
++  bundle = chunk.code;
++});
++test('uses real browser handles and refuses unreviewed, stale, and replayed writes', async ({
++  page,
++}) => {
++  await page.route('https://local-files.test/**', (route) =>
++    route.fulfill({
++      contentType: 'text/html',
++      body: '<!doctype html><title>Local file API test</title>',
++    }),
++  );
++  await page.goto('https://local-files.test/');
++  await page.addScriptTag({ content: bundle });
++  const result = await page.evaluate(async () => {
++    const { Filesystem, localFilesConfigSchema } = window.LocalFilesFixture;
++    const directory = await navigator.storage.getDirectory();
++    const root = await directory.getDirectoryHandle(crypto.randomUUID(), { create: true });
++    const file = await root.getFileHandle('note.txt', { create: true });
++    const initial = await file.createWritable();
++    await initial.write('original');
++    await initial.close();
++    // OPFS provides real file handles without a native picker; permissions there are intrinsic.
++    const folder: Folder = Object.assign(root, {
++      queryPermission: async (): Promise<PermissionState> => 'granted',
++      requestPermission: async (): Promise<PermissionState> => 'granted',
++    });
++    const records = new Map<string, JournalEntry>();
++    const engine = new Filesystem(folder, localFilesConfigSchema.parse({}), {
++      get: async (id) => records.get(id),
++      put: async (id, value) => {
++        records.set(id, value);
++      },
++    });
++    await engine.enable();
++    const sessionId = crypto.randomUUID();
++    const input = { operation: 'write', path: 'note.txt', content: 'approved' } as const;
++    const command: LocalFilesCommand = {
++      version: 1,
++      id: crypto.randomUUID(),
++      sessionId,
++      rootId: crypto.randomUUID(),
++      conversationId: 'chat',
++      runId: 'run',
++      toolCallId: 'call',
++      input,
++      expiresAt: Date.now() + 60000,
++    };
++    const denied = await engine.execute(command);
++    const original = await (await file.getFile()).text();
++    const preview = await engine.preview(input, sessionId);
++    const approved = {
++      ...command,
++      id: crypto.randomUUID(),
++      review: engine.approve(preview, 'call'),
++    };
++    const first = await engine.execute(approved);
++    const second = await engine.execute(approved);
++    const contents = await (await file.getFile()).text();
++    const stalePreview = await engine.preview({ ...input, content: 'stale' }, sessionId);
++    const stale = {
++      ...command,
++      id: crypto.randomUUID(),
++      input: { ...input, content: 'stale' },
++      review: engine.approve(stalePreview, 'call'),
++    };
++    const external = await file.createWritable();
++    await external.write('external');
++    await external.close();
++    const conflicted = await engine.execute(stale);
++    const retained = await (await file.getFile()).text();
++    return { denied, original, first, second, contents, conflicted, retained };
++  });
++  expect(result.denied).toEqual({ ok: false, error: { code: 'REVIEW_REQUIRED' } });
++  expect(result.original).toBe('original');
++  expect(result.first.ok).toBe(true);
++  expect(result.second).toEqual(result.first);
++  expect(result.contents).toBe('approved');
++  expect(result.conflicted).toEqual({ ok: false, error: { code: 'CONFLICT' } });
++  expect(result.retained).toBe('external');
++});
++
++test('keeps folder identities stable across tabs, isolates accounts and removes handles on logout', async ({
++  page,
++}) => {
++  await page.route('https://local-files.test/**', (route) =>
++    route.fulfill({
++      contentType: 'text/html',
++      body: '<!doctype html><title>Local folder registry</title>',
++    }),
++  );
++  await page.goto('https://local-files.test/');
++  await page.addScriptTag({ content: bundle });
++  const result = await page.evaluate(async () => {
++    const { registerFolder, recallFolder, forgetFolders } = window.LocalFilesFixture;
++    const directory = await navigator.storage.getDirectory();
++    const first = await directory.getDirectoryHandle(crypto.randomUUID(), { create: true });
++    const second = await directory.getDirectoryHandle(crypto.randomUUID(), { create: true });
++    const folder = (root: FileSystemDirectoryHandle): Folder =>
++      Object.assign(root, {
++        queryPermission: async (): Promise<PermissionState> => 'granted',
++        requestPermission: async (): Promise<PermissionState> => 'granted',
++      });
++    const one = await registerFolder('owner', folder(first));
++    await registerFolder('owner', folder(second));
++    const again = await registerFolder('owner', folder(first));
++    const [parallel] = await Promise.all([
++      registerFolder('owner', folder(first)),
++      registerFolder('owner', folder(first)),
++    ]);
++    const other = await registerFolder('other-owner', folder(first));
++    const remembered = await recallFolder('owner');
++    await forgetFolders('owner');
++    return {
++      one,
++      again,
++      parallel,
++      other,
++      remembered: remembered?.root,
++      removed: await recallFolder('owner'),
++      retained: (await recallFolder('other-owner'))?.root,
++    };
++  });
++  expect(result.again.id).toBe(result.one.id);
++  expect(result.parallel.id).toBe(result.one.id);
++  expect(result.again.access).toBe('read');
++  expect(result.other.id).not.toBe(result.one.id);
++  expect(result.remembered?.id).toBe(result.one.id);
++  expect(result.removed).toBeUndefined();
++  expect(result.retained?.id).toBe(result.other.id);
++  const peer = await page.context().newPage();
++  await peer.route('https://local-files.test/**', (route) =>
++    route.fulfill({
++      contentType: 'text/html',
++      body: '<!doctype html><title>Peer folder registry</title>',
++    }),
++  );
++  await peer.goto('https://local-files.test/');
++  await peer.addScriptTag({ content: bundle });
++  const shared = await peer.evaluate(async () => {
++    const { registerFolder, recallFolder } = window.LocalFilesFixture;
++    const saved = await recallFolder('other-owner');
++    if (!saved) throw new Error('Expected the peer account folder');
++    return registerFolder('other-owner', saved.folder);
++  });
++  expect(shared.id).toBe(result.other.id);
++  await peer.close();
++});
+diff --git a/e2e/rum/privacy.spec.ts b/e2e/rum/privacy.spec.ts
+index 42f5202d7c925eb42b55624c7ebdf2f59bb431db..861adebcc3094b0b368863b3f88996fe31ab93f5 100644
+--- a/e2e/rum/privacy.spec.ts
++++ b/e2e/rum/privacy.spec.ts
+@@ -104,6 +104,20 @@ for (const mode of ['proxy', 'direct'] as const) {
+       const secret = `synthetic-body-secret-${Date.now()}`;
+       const { traces } = await fixture(page, secret, base);
+       const scenarios = [
++        {
++          path: '/api/local-files/sessions',
++          method: 'POST',
++          requestBody: JSON.stringify({ root: { name: secret } }),
++          responseBody: JSON.stringify({ token: secret }),
++          credential: true,
++        },
++        {
++          path: '/api/local-files/sessions/session-123/results/request-123',
++          method: 'POST',
++          requestBody: JSON.stringify({ ok: true, value: { content: secret } }),
++          responseBody: JSON.stringify({ token: secret }),
++          credential: true,
++        },
+         {
+           path: '/api/auth/login',
+           method: 'POST',
+diff --git a/e2e/setup/local-files-model.cjs b/e2e/setup/local-files-model.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..f19a7ed66598a2386a1a2553a55b75c6a979459d
+--- /dev/null
++++ b/e2e/setup/local-files-model.cjs
+@@ -0,0 +1,31 @@
++const { FakeChatModel } = require('@librechat/agents');
++
++module.exports = (run, context) => {
++  const write = JSON.stringify(context.messages ?? []).includes('LOCAL_WRITE');
++  const name = write ? 'local_write' : 'local_read';
++  const id = write ? 'local-write-call' : 'local-read-call';
++  class Model extends FakeChatModel {
++    async *_streamResponseChunks(restored, options, manager) {
++      if (restored.some((message) => message.tool_call_id === id)) {
++        yield* new FakeChatModel({
++          responses: ['Local file operation complete.'],
++        })._streamResponseChunks(restored, options, manager);
++        return;
++      }
++      yield* super._streamResponseChunks(restored, options, manager);
++    }
++  }
++  const model = new Model({
++    responses: ['', 'Local file operation complete.'],
++    toolCalls: [
++      {
++        type: 'tool_call',
++        name,
++        id,
++        args: { path: 'note.txt', ...(write ? { content: 'reviewed by the owner' } : {}) },
++      },
++    ],
++  });
++  model.callbacks = context.modelCallbacks;
++  run.Graph.overrideModel = model;
++};
+diff --git a/e2e/setup/local-files.ts b/e2e/setup/local-files.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..88f65b86a97cdef1c248deec60ba5c103a71759c
+--- /dev/null
++++ b/e2e/setup/local-files.ts
+@@ -0,0 +1,7 @@
++export { Filesystem } from '../../client/src/components/Filesystem/engine';
++export {
++  registerFolder,
++  recallFolder,
++  forgetFolders,
++} from '../../client/src/components/Filesystem/storage';
++export { localFilesConfigSchema } from '../../packages/data-provider/src/filesystem';
+diff --git a/packages/api/src/agents/errors.ts b/packages/api/src/agents/errors.ts
+index e13d44c10bef21ef43f4eaedf3f4cbe5f1ff0a65..0d08f0056d08026ba89b56bfeca54d3aebfb21f3 100644
+--- a/packages/api/src/agents/errors.ts
++++ b/packages/api/src/agents/errors.ts
+@@ -28,6 +28,7 @@ const FATAL_AGENT_INITIALIZATION_CODES = new Set(
+     ErrorTypes.RESOURCE_RECOVERY_REQUIRED,
+     ErrorTypes.STATEFUL_CODE_ENVIRONMENT_NOT_ALLOWED,
+     ErrorTypes.CODE_WORKSPACE_UNAVAILABLE,
++    ErrorTypes.LOCAL_FILES_UNAVAILABLE,
+   ].filter((code): code is string => typeof code === 'string'),
+ );
+ 
+diff --git a/packages/api/src/agents/hitl/policy.ts b/packages/api/src/agents/hitl/policy.ts
+index 29bf2f48945f366166e7fcc4628e758e75d6289b..d752e23dde7cfb71dcf0c37d8d4ff3b429dede60 100644
+--- a/packages/api/src/agents/hitl/policy.ts
++++ b/packages/api/src/agents/hitl/policy.ts
+@@ -460,6 +460,7 @@ export interface PendingActionContext {
+ 
+ /** Request fields that decide which agent/graph + tool set a turn runs. */
+ export interface AgentRequestFingerprintFields {
++  localFilesSessionId?: string;
+   endpoint?: string | null;
+   endpointType?: string | null;
+   agent_id?: string | null;
+@@ -501,6 +502,7 @@ function normalizeEphemeralAgent(ephemeral: Record<string, unknown> | null | und
+  * works across reloads/replicas, and a crafted resume can't swap the tool set.
+  */
+ export const RESUME_CONTEXT_KEYS = [
++  'localFilesSessionId',
+   'endpoint',
+   'endpointType',
+   'agent_id',
+@@ -895,6 +897,9 @@ export function applyResumeModelParameters(
+ 
+ export function computeAgentRequestFingerprint(fields: AgentRequestFingerprintFields): string {
+   const canonical = JSON.stringify({
++    ...(fields.localFilesSessionId != null
++      ? { localFilesSessionId: fields.localFilesSessionId }
++      : {}),
+     endpoint: fields.endpoint ?? null,
+     endpointType: fields.endpointType ?? null,
+     agent_id: fields.agent_id ?? null,
+diff --git a/packages/api/src/agents/run.ts b/packages/api/src/agents/run.ts
+index 6afc940f5e3f355452f7f7f968187975bf7f0b7a..0f874d54cdd018cbaa5f428a02070baaa606b1e2 100644
+--- a/packages/api/src/agents/run.ts
++++ b/packages/api/src/agents/run.ts
+@@ -75,6 +75,7 @@ import type { LangfuseTraceContext } from '~/langfuse/identity';
+ import type { ResolvedAlwaysApplySkill } from '~/agents/skills';
+ import type { CodeExecutionContext } from '~/agents/execution';
+ import type { SubagentCodeHostArgSpecs } from '~/code/targets';
++import type { LocalFilesBinding } from '~/filesystem/service';
+ import type { SdkFileSession } from './remoteSdk/attachments';
+ import type { MCPToolAlias } from '~/tools/classification';
+ import type { ReviewedToolApprovals } from './hitl/modes';
+@@ -144,6 +145,7 @@ import { createAgentToolApprovalSession, bindRunToolApprovalSession } from './hi
+ import { resolveConfigHeaders, resolveModelHeaders, mergeHeaders } from '~/utils/headers';
+ import { createSdkAgentRun, resolveSdkAgentBinding, SdkAgentRuntimeError } from './sdk';
+ import { interruptToolHandler, supportsRunInterruption } from '~/agents/steering/tools';
++import { createLocalFilesTools, localFilesApprovalHook } from '~/filesystem/runtime';
+ import { getLLMConfig as getAnthropicLLMConfig } from '~/endpoints/anthropic/llm';
+ import { hasModelBoundContentProtection } from '../middleware/modelBoundContent';
+ import { reportSubagentResolutionFailure } from '~/agents/failures/subagent';
+@@ -154,6 +156,7 @@ import { getAzureCredentials, constructAzureURL } from '~/utils/azure';
+ import { buildEffectiveToolApprovalPolicy } from '~/agents/hitl/allow';
+ import { prepareQueuedCodeFileContext } from '~/files/code/queued';
+ import { getBuiltInBaseURL } from '~/endpoints/openai/initialize';
++import { LocalFilesUnavailableError } from '~/filesystem/errors';
+ import { getProviderConfig } from '~/endpoints/config/providers';
+ import { createSafeUser, createSafeAgent } from '~/utils/env';
+ import { shareDeferredDefinitions } from '~/agents/deferral';
+@@ -2383,6 +2386,7 @@ export async function createRun({
+   subagentUsageSink,
+   subagentTasks,
+   runFiles,
++  localFiles,
+   steering,
+   activityLabel,
+   activityPhase,
+@@ -2501,6 +2505,7 @@ export async function createRun({
+   subagentTasks?: SubagentTaskConfig;
+   /** Run-scoped file authorization and child context, supplied by the host. */
+   runFiles?: RunFileSession;
++  localFiles?: LocalFilesBinding;
+   /**
+    * The run-scoped steer-drain hook (a `PostToolBatch` callback built via
+    * `createSteerDrainHook`). Registered on the run's hook registry independent
+@@ -2581,6 +2586,10 @@ export async function createRun({
+     subagents: resolveSubagents(agent.subagents, appConfig?.endpoints?.agents?.capabilities),
+   }));
+   const resolvedRunId = runId ?? randomUUID();
++  const localRoot =
++    localFiles && hitlCapable && conversationId ? await localFiles.root(conversationId) : undefined;
++  if ((localFiles || requestBody?.localFilesSessionId) && !localRoot)
++    throw new LocalFilesUnavailableError();
+   const registration = resolveSdkAgentBinding(
+     agents,
+     appConfig?.endpoints?.agents,
+@@ -2951,6 +2960,26 @@ export async function createRun({
+     if (runFilesActive && runFiles != null && (isSubagent || agent.subagents?.enabled === true)) {
+       graphTools = [...(graphTools ?? []), ...createRunFileTools(runFiles, agent.id, signal)];
+     }
++    if (
++      !isSubagent &&
++      agent.id === agents[0]?.id &&
++      localFiles &&
++      localRoot &&
++      hitlCapable &&
++      conversationId
++    ) {
++      const allowed = createLocalFilesTools(
++        localFiles,
++        conversationId,
++        signal,
++        localRoot.access === 'readwrite',
++      ).filter((candidate) =>
++        appConfig?.includedTools?.length
++          ? appConfig.includedTools.includes(candidate.name)
++          : !appConfig?.filteredTools?.includes(candidate.name),
++      );
++      graphTools = [...(graphTools ?? []), ...allowed];
++    }
+     if (graphTools) {
+       /**
+        * Typed structurally — not as `AgentInputs['graphTools']` — because the
+@@ -3147,6 +3176,14 @@ export async function createRun({
+     mcpToolAliases,
+     [
+       { hook: agentApprovalSession.hook },
++      ...(localFiles
++        ? [
++            {
++              hook: localFilesApprovalHook,
++              toolNames: ['local_write', 'local_edit', 'local_mkdir', 'local_move'],
++            },
++          ]
++        : []),
+       ...(resolvedToolApprovalHooks ??
+         buildToolApprovalHooks({
+           userId: user?.id,
+diff --git a/packages/api/src/filesystem/errors.ts b/packages/api/src/filesystem/errors.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..fc896ad212c589f56abea757a71c5c41c7c92073
+--- /dev/null
++++ b/packages/api/src/filesystem/errors.ts
+@@ -0,0 +1,10 @@
++import { ErrorTypes } from 'librechat-data-provider';
++
++export class LocalFilesUnavailableError extends Error {
++  readonly code = ErrorTypes.LOCAL_FILES_UNAVAILABLE;
++  readonly status = 409;
++  readonly statusCode = 409;
++  constructor() {
++    super('The selected local folder is unavailable.');
++  }
++}
+diff --git a/packages/api/src/filesystem/index.ts b/packages/api/src/filesystem/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e72314e9c8dd9931bd89b77463094c046039ec74
+--- /dev/null
++++ b/packages/api/src/filesystem/index.ts
+@@ -0,0 +1,2 @@
++export * from './service';
++export * from './runtime';
+diff --git a/packages/api/src/filesystem/runtime.spec.ts b/packages/api/src/filesystem/runtime.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5e9faf95a0116f7031bd0e25a52f6eef10d6748c
+--- /dev/null
++++ b/packages/api/src/filesystem/runtime.spec.ts
+@@ -0,0 +1,127 @@
++import { createHash, randomUUID } from 'node:crypto';
++import { localFilesConfigSchema, serializeLocalFiles } from 'librechat-data-provider';
++import type { Agents, LocalFilesInput, LocalFilesReview } from 'librechat-data-provider';
++import type { LocalFilesBinding } from './service';
++import {
++  createLocalFilesTools,
++  markLocalFileApprovalRequests,
++  localFilesApprovalHook,
++} from './runtime';
++
++it('never offers remembered or edited decisions for local writes', () => {
++  const payload: Agents.ToolApprovalInterruptPayload = {
++    type: 'tool_approval',
++    action_requests: [
++      {
++        name: 'local_write',
++        tool_call_id: 'call',
++        arguments: { path: 'note.txt', content: 'new' },
++      },
++    ],
++    review_configs: [
++      {
++        action_name: 'local_write',
++        tool_call_id: 'call',
++        allowed_decisions: ['approve', 'reject', 'edit'],
++        allow_always: true,
++      },
++    ],
++  };
++  expect(markLocalFileApprovalRequests(payload).review_configs[0]).toMatchObject({
++    allow_always: false,
++    allowed_decisions: ['approve', 'reject'],
++  });
++});
++it('installs a mandatory ask decision instead of trusting a bypass preference', async () => {
++  const input = {
++    hook_event_name: 'PreToolUse' as const,
++    runId: 'run',
++    toolUseId: 'call',
++    toolName: 'local_write',
++    toolInput: { path: 'note.txt', content: 'new' },
++  };
++  const result = await localFilesApprovalHook(input, new AbortController().signal);
++  expect(result).toMatchObject({ decision: 'ask', allowedDecisions: ['approve', 'reject'] });
++});
++
++function binding(decisions: Agents.ToolApprovalResolution[] = []): LocalFilesBinding {
++  return {
++    sessionId: randomUUID(),
++    config: localFilesConfigSchema.parse({ enabled: true }),
++    decisions,
++    root: async () => undefined,
++    invoke: jest.fn(async () => ({ ok: true as const, value: { path: 'note.txt' } })),
++  };
++}
++it('uses the real tool invocation ID and each operation’s required input contract', async () => {
++  const session = binding();
++  const tools = createLocalFilesTools(session, 'chat', new AbortController().signal, false);
++  expect(tools.map((entry) => entry.name)).toEqual(['local_list', 'local_read']);
++  const read = tools.find((entry) => entry.name === 'local_read')!;
++  await read.invoke({
++    type: 'tool_call',
++    id: 'call',
++    name: 'local_read',
++    args: { path: 'note.txt' },
++  });
++  expect(session.invoke).toHaveBeenCalledWith(
++    expect.objectContaining({
++      toolCallId: 'call',
++      conversationId: 'chat',
++      input: { operation: 'read', path: 'note.txt' },
++    }),
++    expect.any(AbortSignal),
++  );
++  await expect(read.invoke({})).rejects.toThrow();
++});
++it('dispatches a mutation only with a once-only receipt for the same session and arguments', async () => {
++  const session = binding();
++  const write = createLocalFilesTools(session, 'chat', new AbortController().signal, true).find(
++    (entry) => entry.name === 'local_write',
++  )!;
++  const input: LocalFilesInput = { operation: 'write', path: 'note.txt', content: 'new' };
++  const call = {
++    type: 'tool_call' as const,
++    id: 'call',
++    name: 'local_write',
++    args: { path: input.path, content: 'new' },
++  };
++  await write.invoke(call);
++  expect(session.invoke).not.toHaveBeenCalled();
++  const review: LocalFilesReview = {
++    id: randomUUID(),
++    sessionId: session.sessionId,
++    digest: createHash('sha256').update(serializeLocalFiles(input)).digest('hex'),
++    before: [{ path: 'note.txt', hash: null }],
++  };
++  session.decisions.push({
++    tool_call_id: 'call',
++    decision: 'approve',
++    scope: 'session',
++    localFiles: review,
++  });
++  await write.invoke(call);
++  expect(session.invoke).not.toHaveBeenCalled();
++  session.decisions[0].scope = 'once';
++  await write.invoke(call);
++  expect(session.invoke).toHaveBeenCalledTimes(1);
++  await write.invoke({ ...call, args: { ...call.args, content: 'changed after approval' } });
++  expect(session.invoke).toHaveBeenCalledTimes(1);
++});
++it('translates an operational failure at the tool boundary without exposing diagnostics', async () => {
++  const session = binding();
++  session.invoke = async () => {
++    throw new Error('password=secret cache payload');
++  };
++  const read = createLocalFilesTools(session, 'chat', new AbortController().signal, false).find(
++    (entry) => entry.name === 'local_read',
++  )!;
++  const result = await read.invoke({
++    type: 'tool_call',
++    id: 'call',
++    name: 'local_read',
++    args: { path: 'note.txt' },
++  });
++  expect(JSON.stringify(result)).toContain('UNAVAILABLE');
++  expect(JSON.stringify(result)).not.toMatch(/password|secret|cache payload/);
++});
+diff --git a/packages/api/src/filesystem/runtime.ts b/packages/api/src/filesystem/runtime.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..2395f5e03d4c60050355ad52b5d85856c8a338cf
+--- /dev/null
++++ b/packages/api/src/filesystem/runtime.ts
+@@ -0,0 +1,150 @@
++import { z } from 'zod';
++import { createHash } from 'node:crypto';
++import { logger } from '@librechat/data-schemas';
++import { tool } from '@librechat/agents/langchain/tools';
++import {
++  LOCAL_FILES_TOOLS,
++  localFilesInputSchema,
++  localFilesMutation,
++  localFilesOperation,
++  localFilesReviewSchema,
++  serializeLocalFiles,
++} from 'librechat-data-provider';
++import type { StructuredToolInterface } from '@librechat/agents/langchain/tools';
++import type { Agents } from 'librechat-data-provider';
++import type { HookCallback } from '@librechat/agents';
++import type { ResolvedToolApprovalHook } from '~/agents/hitl/hooks';
++import type { LocalFilesBinding } from './service';
++import type { ServerRequest } from '~/types';
++import { localFilesFailure, localFilesAvailable } from './service';
++import { getSafeErrorMetadata } from '~/utils/errors';
++
++const descriptions = {
++  list: 'List one page in the user-selected local folder. Use path "" for its root and cursor for the next page.',
++  read: 'Read a UTF-8 text or code file in the user-selected local folder. Contents become part of this chat.',
++  write:
++    'Create or replace a UTF-8 text file in the selected local folder. Supply content. Always requires the owner to review the exact change.',
++  edit: 'Apply exact, unique oldText/newText replacements to a local UTF-8 file. Supply edits. Always requires local review.',
++  mkdir:
++    'Create a directory inside the selected local folder. Its parent must exist. Always requires local review.',
++  move: 'Move one file within the selected local folder. Supply destination. Copies, verifies, then removes the source; not atomic and never overwrites a destination. Requires local review. Do not automatically retry an uncertain result.',
++};
++
++export const localFilesApprovalHook: HookCallback<'PreToolUse'> = async ({ toolName }) => {
++  const operation = localFilesOperation(toolName);
++  return operation && localFilesMutation(operation)
++    ? { decision: 'ask', allowedDecisions: ['approve', 'reject'] }
++    : {};
++};
++
++/** Remembered tool-wide grants never authorize a local disk mutation. */
++export function markLocalFileApprovalRequests<T extends Agents.HumanInterruptPayload>(
++  payload: T,
++): T {
++  if (payload.type !== 'tool_approval') return payload;
++  const ids = new Set(
++    payload.action_requests
++      .filter((request) => {
++        const operation = localFilesOperation(request.name);
++        return operation != null && localFilesMutation(operation);
++      })
++      .map((request) => request.tool_call_id),
++  );
++  return {
++    ...payload,
++    review_configs: payload.review_configs.map((config) =>
++      ids.has(config.tool_call_id)
++        ? { ...config, allow_always: false, allowed_decisions: ['approve', 'reject'] }
++        : config,
++    ),
++  };
++}
++
++export function localFilesAdmission(
++  req: ServerRequest & { _isScheduledFire?: boolean },
++  hooks: readonly ResolvedToolApprovalHook[],
++  names: readonly string[] = [],
++): {
++  hostGeneratedToolNames: readonly string[];
++  resolvedProgrammaticHooks: readonly ResolvedToolApprovalHook[];
++} {
++  if (
++    !req.body.localFilesSessionId ||
++    req._isScheduledFire === true ||
++    !localFilesAvailable(req.config)
++  )
++    return { hostGeneratedToolNames: names, resolvedProgrammaticHooks: hooks };
++  return {
++    hostGeneratedToolNames: [...names, ...Object.values(LOCAL_FILES_TOOLS)],
++    resolvedProgrammaticHooks: [
++      ...hooks,
++      { hook: localFilesApprovalHook, matcher: '^local_(write|edit|mkdir|move)$' },
++    ],
++  };
++}
++
++export function createLocalFilesTools(
++  binding: LocalFilesBinding,
++  conversationId: string,
++  signal: AbortSignal,
++  writable: boolean,
++): StructuredToolInterface[] {
++  return Object.entries(LOCAL_FILES_TOOLS)
++    .filter(([operation]) => writable || operation === 'list' || operation === 'read')
++    .map(([operation, name]) => {
++      const option = localFilesInputSchema.options.find(
++        (entry) => entry.shape.operation.value === operation,
++      );
++      if (!option) throw new Error('Local file tool has no input contract');
++      const schema: z.ZodObject = option;
++      return tool(
++        async (args, config) => {
++          const parsed = localFilesInputSchema.safeParse({ ...args, operation });
++          if (!parsed.success) return JSON.stringify(localFilesFailure('INVALID_REQUEST'));
++          const input = parsed.data;
++          if (
++            input.operation === 'write' &&
++            Buffer.byteLength(input.content, 'utf8') > binding.config.maxTextBytes
++          ) {
++            return JSON.stringify(localFilesFailure('TOO_LARGE'));
++          }
++          const toolCallId = config.toolCall?.id;
++          if (!toolCallId) return JSON.stringify(localFilesFailure('UNAVAILABLE'));
++          const decision = binding.decisions.find((entry) => entry.tool_call_id === toolCallId);
++          const review = localFilesReviewSchema.safeParse(decision?.localFiles);
++          if (
++            localFilesMutation(input.operation) &&
++            (decision?.decision !== 'approve' ||
++              (decision.scope != null && decision.scope !== 'once') ||
++              !review.success ||
++              review.data.sessionId !== binding.sessionId ||
++              review.data.digest !==
++                createHash('sha256').update(serializeLocalFiles(input)).digest('hex'))
++          )
++            return JSON.stringify(localFilesFailure('REVIEW_REQUIRED'));
++          try {
++            return JSON.stringify(
++              await binding.invoke(
++                {
++                  conversationId,
++                  toolCallId,
++                  runId: '',
++                  input,
++                  ...(review.success ? { review: review.data } : {}),
++                },
++                config.signal ?? signal,
++              ),
++            );
++          } catch (error) {
++            logger.error('[Local files] Tool transport failed', getSafeErrorMetadata(error));
++            return JSON.stringify(localFilesFailure('UNAVAILABLE'));
++          }
++        },
++        {
++          name,
++          description: descriptions[operation as keyof typeof descriptions],
++          schema: schema.omit({ operation: true }),
++        },
++      );
++    });
++}
+diff --git a/packages/api/src/filesystem/service.spec.ts b/packages/api/src/filesystem/service.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..09a2c3250a5a748cb302d9b47daa426e23515836
+--- /dev/null
++++ b/packages/api/src/filesystem/service.spec.ts
+@@ -0,0 +1,219 @@
++import { Keyv } from 'keyv';
++import express from 'express';
++import { randomUUID } from 'node:crypto';
++import { LOCAL_FILES_HEADER, localFilesConfigSchema } from 'librechat-data-provider';
++import type { LocalFilesCommand, LocalFilesSession } from 'librechat-data-provider';
++import type { AppConfig } from '@librechat/data-schemas';
++import type { Request, Response } from 'express';
++import type { ServerRequest } from '~/types';
++import { createLocalFilesService, localFilesCapabilities } from './service';
++
++const settings = localFilesConfigSchema.parse({ enabled: true, requestTimeoutMs: 10000 });
++const config = {
++  config: { localFiles: settings },
++  endpoints: { agents: { toolApproval: { enabled: true, mode: 'bypass' } } },
++} as AppConfig;
++const principal = { id: 'owner', tenantId: 'tenant' };
++const conversationId = randomUUID();
++const root = { id: randomUUID(), name: 'workspace', access: 'readwrite' as const };
++function response() {
++  const state: { status: number; body?: unknown } = { status: 200 };
++  const res = {
++    status: (code: number) => {
++      state.status = code;
++      return res;
++    },
++    json: (body: unknown) => {
++      state.body = body;
++      return res;
++    },
++    sendStatus: (code: number) => {
++      state.status = code;
++      return res;
++    },
++  };
++  return { state, res: res as Response };
++}
++function request(
++  session?: LocalFilesSession,
++  body: object = {},
++  user = principal,
++  requestId?: string,
++) {
++  return Object.assign(Object.create(express.request), {
++    config,
++    user,
++    body,
++    params: { id: session?.id, requestId },
++    get: (header: string) => (header === LOCAL_FILES_HEADER ? session?.token : undefined),
++  }) as Request;
++}
++async function setup() {
++  const store = new Keyv();
++  const service = createLocalFilesService({ store });
++  const handlers = service.router();
++  const created = response();
++  await handlers.create(request(undefined, { version: 1, conversationId, root }), created.res);
++  expect(created.state.status).toBe(201);
++  return { store, service, handlers, session: created.state.body as LocalFilesSession };
++}
++it('does not advertise or activate the feature by default or without approval support', () => {
++  expect(localFilesCapabilities(undefined)).toEqual({});
++  expect(localFilesCapabilities({ ...config, endpoints: {} }).localFiles?.available).toBe(false);
++});
++it('binds an expiring session to its owner, tenant, and conversation', async () => {
++  const { service, session } = await setup();
++  expect((await service.get(session.id, principal, conversationId))?.root).toEqual(root);
++  expect(
++    await service.get(session.id, { ...principal, id: 'other' }, conversationId),
++  ).toBeUndefined();
++  expect(
++    await service.get(session.id, { ...principal, tenantId: 'other' }, conversationId),
++  ).toBeUndefined();
++  expect(await service.get(session.id, principal, randomUUID())).toBeUndefined();
++});
++it('never accepts a guessed session or a token from a different session', async () => {
++  const { handlers, session } = await setup();
++  for (const candidate of [
++    { ...session, token: randomUUID() },
++    { ...session, id: randomUUID() },
++  ]) {
++    const res = response();
++    await handlers.heartbeat(request(candidate), res.res);
++    expect(res.state).toEqual({ status: 404, body: { code: 'UNAVAILABLE' } });
++  }
++});
++it('removes authority immediately when disconnected', async () => {
++  const { handlers, session, service } = await setup();
++  await handlers.remove(request(session), response().res);
++  expect(await service.get(session.id, principal, conversationId)).toBeUndefined();
++});
++it('keeps storage failures out of a success response and out of client diagnostics', async () => {
++  const { handlers, session, store } = await setup();
++  jest.spyOn(store, 'get').mockRejectedValueOnce(new Error('password=secret provider payload'));
++  const res = response();
++  await handlers.heartbeat(request(session), res.res);
++  expect(res.state).toEqual({ status: 503, body: { code: 'UNAVAILABLE' } });
++});
++it('does not dispatch another principal’s request to a browser', async () => {
++  const { service, session } = await setup();
++  const send = jest.fn();
++  expect(
++    await service.invoke({
++      principal: { ...principal, id: 'other' },
++      sessionId: session.id,
++      command: {
++        runId: 'run',
++        toolCallId: 'call',
++        conversationId,
++        input: { operation: 'read', path: 'note.txt' },
++      },
++      config: settings,
++      send,
++      signal: new AbortController().signal,
++    }),
++  ).toEqual({ ok: false, error: { code: 'UNAVAILABLE' } });
++  expect(send).not.toHaveBeenCalled();
++});
++it('accepts a result through a peer service without exposing session credentials in the command', async () => {
++  const { service, session, store } = await setup();
++  const peer = createLocalFilesService({ store }).router();
++  let delivered: LocalFilesCommand | undefined;
++  let resultStatus: number | undefined;
++  const result = await service.invoke({
++    principal,
++    sessionId: session.id,
++    command: {
++      runId: 'run',
++      toolCallId: 'call',
++      conversationId,
++      input: { operation: 'read', path: 'note.txt' },
++    },
++    config: settings,
++    signal: new AbortController().signal,
++    send: (command) => {
++      delivered = command;
++      const res = response();
++      void peer
++        .result(
++          request(
++            session,
++            { ok: true, value: { path: 'note.txt', content: 'contents' } },
++            principal,
++            command.id,
++          ),
++          res.res,
++        )
++        .then(() => {
++          resultStatus = res.state.status;
++        });
++    },
++  });
++  expect(result).toEqual({ ok: true, value: { path: 'note.txt', content: 'contents' } });
++  expect(resultStatus).toBe(204);
++  expect(JSON.stringify(delivered)).not.toContain(session.token);
++});
++it('publishes through the resumable job transport with the exact generation, without writing to the start HTTP response', async () => {
++  const { service, session, handlers } = await setup();
++  const emitChunk = jest.fn(async (_streamId: string, event: { data: LocalFilesCommand }) => {
++    await handlers.result(
++      request(
++        session,
++        { ok: true, value: { path: 'note.txt', content: 'contents' } },
++        principal,
++        event.data.id,
++      ),
++      response().res,
++    );
++  });
++  const binding = service.bind({
++    req: request(session, { localFilesSessionId: session.id, conversationId }) as ServerRequest,
++    runId: 'run',
++    config,
++    streamId: conversationId,
++    jobCreatedAt: 123,
++    transport: { emitChunk },
++  });
++  expect(
++    await binding?.invoke(
++      {
++        conversationId,
++        runId: 'run',
++        toolCallId: 'call',
++        input: { operation: 'read', path: 'note.txt' },
++      },
++      new AbortController().signal,
++    ),
++  ).toEqual({ ok: true, value: { path: 'note.txt', content: 'contents' } });
++  expect(emitChunk).toHaveBeenCalledWith(
++    conversationId,
++    expect.objectContaining({ event: 'on_local_file_request' }),
++    { expectedCreatedAt: 123, durable: true },
++  );
++  expect(JSON.stringify(emitChunk.mock.calls)).not.toContain(session.token);
++});
++it('cancels within the request deadline even when publication never acknowledges', async () => {
++  const { service, session } = await setup();
++  const controller = new AbortController();
++  const send = jest.fn((command: LocalFilesCommand) => {
++    if (command.cancelled) return;
++    controller.abort();
++    return new Promise<void>(() => undefined);
++  });
++  expect(
++    await service.invoke({
++      principal,
++      sessionId: session.id,
++      config: settings,
++      signal: controller.signal,
++      send,
++      command: {
++        conversationId,
++        runId: 'run',
++        toolCallId: 'call',
++        input: { operation: 'read', path: 'note.txt' },
++      },
++    }),
++  ).toEqual({ ok: false, error: { code: 'CANCELLED' } });
++  expect(send).toHaveBeenCalledWith(expect.objectContaining({ cancelled: true }));
++});
+diff --git a/packages/api/src/filesystem/service.ts b/packages/api/src/filesystem/service.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..03e8acedbdc8c2bc1efcfc0e3a83e7aeeb79555c
+--- /dev/null
++++ b/packages/api/src/filesystem/service.ts
+@@ -0,0 +1,386 @@
++import { z } from 'zod';
++import { logger } from '@librechat/data-schemas';
++import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
++import {
++  LOCAL_FILES_EVENT,
++  LOCAL_FILES_HEADER,
++  LOCAL_FILES_VERSION,
++  localFilesConfigSchema,
++  localFilesRootSchema,
++  localFilesResultSchema,
++} from 'librechat-data-provider';
++import type {
++  Agents,
++  LocalFilesRoot,
++  LocalFilesSession,
++  LocalFilesConfig,
++  LocalFilesCommand,
++  LocalFilesResult,
++} from 'librechat-data-provider';
++import type { AppConfig } from '@librechat/data-schemas';
++import type { Request, Response } from 'express';
++import type { Keyv } from 'keyv';
++import type { FlowLease } from '~/flow/manager';
++import type { ServerRequest } from '~/types';
++import { FlowStateManager, FLOW_MONITOR_SETTLED } from '~/flow/manager';
++import { getSafeErrorMetadata } from '~/utils/errors';
++
++export interface LocalFilesPrincipal {
++  id: string;
++  tenantId?: string;
++}
++interface Session {
++  id: string;
++  principal: LocalFilesPrincipal;
++  conversationId: string;
++  root: LocalFilesRoot;
++  tokenHash: string;
++}
++interface Pending {
++  sessionId: string;
++  createdAt: number;
++  expiresAt: number;
++}
++const principalSchema = z.object({ id: z.string().min(1), tenantId: z.string().optional() });
++const registration = z
++  .object({
++    version: z.literal(LOCAL_FILES_VERSION),
++    conversationId: z.uuid(),
++    root: localFilesRootSchema,
++  })
++  .strict();
++const hash = (text: string): string => createHash('sha256').update(text).digest('hex');
++const key = (id: string): string => `local-files:session:${id}`;
++const pendingKey = (id: string): string => `local-files:request:${id}`;
++export const localFilesFailure = (
++  code: Extract<LocalFilesResult, { ok: false }>['error']['code'],
++): LocalFilesResult => ({ ok: false, error: { code } });
++
++export function localFilesAvailable(config: AppConfig | undefined): boolean {
++  return (
++    config?.config?.localFiles?.enabled === true &&
++    config.endpoints?.agents?.toolApproval?.enabled === true
++  );
++}
++
++export function localFilesCapabilities(config: AppConfig | undefined): {
++  localFiles?: LocalFilesConfig & { version: typeof LOCAL_FILES_VERSION; available: boolean };
++} {
++  if (config?.config?.localFiles?.enabled !== true) return {};
++  return {
++    localFiles: {
++      ...localFilesConfigSchema.parse(config.config.localFiles),
++      version: LOCAL_FILES_VERSION,
++      available: localFilesAvailable(config),
++    },
++  };
++}
++
++/** The store and request transport are supplied by the host; this service never opens host files. */
++export function createLocalFilesService({ store }: { store: Keyv }): LocalFilesService {
++  // The protocol bounds a request to five minutes. Effective deployments may set a shorter deadline.
++  const flows = new FlowStateManager<LocalFilesResult>(store, { ttl: 300000 });
++  const waiters = new Map<string, (result: LocalFilesResult) => void>();
++  const owns = (
++    session: Session,
++    principal: LocalFilesPrincipal,
++    conversationId?: string,
++  ): boolean =>
++    session.principal.id === principal.id &&
++    session.principal.tenantId === principal.tenantId &&
++    (conversationId == null || session.conversationId === conversationId);
++
++  async function get(
++    id: string,
++    principal: LocalFilesPrincipal,
++    conversationId?: string,
++  ): Promise<Session | undefined> {
++    if (!z.uuid().safeParse(id).success) return;
++    const session = await store.get<Session>(key(id));
++    return session && owns(session, principal, conversationId) ? session : undefined;
++  }
++  async function authorized(req: Request): Promise<Session | undefined> {
++    const principal = principalSchema.safeParse(req.user);
++    if (!principal.success || typeof req.params.id !== 'string') return;
++    const session = await get(req.params.id, principal.data);
++    const token = req.get(LOCAL_FILES_HEADER);
++    if (!session || !token || token.length > 256) return;
++    return timingSafeEqual(Buffer.from(hash(token), 'hex'), Buffer.from(session.tokenHash, 'hex'))
++      ? session
++      : undefined;
++  }
++
++  async function invoke({
++    principal,
++    sessionId,
++    command,
++    config,
++    send,
++    signal,
++  }: {
++    principal: LocalFilesPrincipal;
++    sessionId: string;
++    command: Omit<LocalFilesCommand, 'id' | 'expiresAt' | 'version' | 'rootId' | 'sessionId'>;
++    config: LocalFilesConfig;
++    send: (command: LocalFilesCommand) => void | Promise<void>;
++    signal: AbortSignal;
++  }): Promise<LocalFilesResult> {
++    const session = await get(sessionId, principal, command.conversationId);
++    if (!session) return localFilesFailure('UNAVAILABLE');
++    if (
++      command.input.operation !== 'list' &&
++      command.input.operation !== 'read' &&
++      session.root.access !== 'readwrite'
++    ) {
++      return localFilesFailure('PERMISSION_DENIED');
++    }
++    const id = randomUUID();
++    const expiresAt = Date.now() + config.requestTimeoutMs;
++    await flows.initFlow(id, 'local_files', { sessionId, state: id });
++    const flow = await flows.getFlowState(id, 'local_files');
++    if (!flow) throw new Error('Local file request was not persisted');
++    await store.set(
++      pendingKey(id),
++      { sessionId, createdAt: flow.createdAt, expiresAt } satisfies Pending,
++      config.requestTimeoutMs,
++    );
++    const timeout = AbortSignal.timeout(config.requestTimeoutMs);
++    const combined = AbortSignal.any([signal, timeout]);
++    const monitor = new AbortController();
++    const local = new Promise<LocalFilesResult>((resolve) => waiters.set(id, resolve));
++    const event: LocalFilesCommand = {
++      ...command,
++      id,
++      sessionId,
++      rootId: session.root.id,
++      version: LOCAL_FILES_VERSION,
++      expiresAt,
++    };
++    const cancel = () => {
++      void Promise.resolve()
++        .then(() => send({ ...event, cancelled: true }))
++        .catch((error: unknown) =>
++          logger.error('[Local files] Cancellation delivery failed', getSafeErrorMetadata(error)),
++        );
++    };
++    combined.addEventListener('abort', cancel, { once: true });
++    try {
++      combined.throwIfAborted();
++      const publication = Promise.resolve()
++        .then(() => send(event))
++        .then(() => local);
++      return await Promise.race([
++        local,
++        publication,
++        flows.createFlow(id, 'local_files', {}, AbortSignal.any([combined, monitor.signal]), false),
++      ]);
++    } catch (error) {
++      if (combined.aborted) return localFilesFailure(signal.aborted ? 'CANCELLED' : 'TIMEOUT');
++      throw error;
++    } finally {
++      combined.removeEventListener('abort', cancel);
++      waiters.delete(id);
++      monitor.abort(FLOW_MONITOR_SETTLED);
++      await store.delete(pendingKey(id));
++      await flows.deleteFlow(id, 'local_files');
++    }
++  }
++
++  function router() {
++    async function handle(
++      req: Request & { config?: AppConfig },
++      res: Response,
++      action: string,
++    ): Promise<void> {
++      let lease: FlowLease | null = null;
++      const principal = principalSchema.safeParse(req.user);
++      if (!principal.success) {
++        res.status(401).json({ code: 'UNAUTHORIZED' });
++        return;
++      }
++      try {
++        const config = req.config;
++        if (!localFilesAvailable(config)) {
++          res.status(403).json({ code: 'UNAVAILABLE' });
++          return;
++        }
++        const settings = localFilesConfigSchema.parse(config?.config?.localFiles);
++        if (action === 'create') {
++          const parsed = registration.safeParse(req.body);
++          if (!parsed.success) {
++            res.status(400).json({ code: 'INVALID_REQUEST' });
++            return;
++          }
++          const id = randomUUID();
++          const token = randomUUID() + randomUUID();
++          const session: Session = {
++            id,
++            principal: principal.data,
++            conversationId: parsed.data.conversationId,
++            root: parsed.data.root,
++            tokenHash: hash(token),
++          };
++          await store.set(key(id), session, settings.sessionTtlMs);
++          res.status(201).json({
++            id,
++            token,
++            root: session.root,
++            config: settings,
++            version: LOCAL_FILES_VERSION,
++          } satisfies LocalFilesSession);
++          return;
++        }
++        const current = await authorized(req);
++        if (!current) {
++          res.status(404).json({ code: 'UNAVAILABLE' });
++          return;
++        }
++        lease = await flows.acquireLease(`local-files-session:${current.id}`, {
++          leaseMs: settings.sessionTtlMs,
++          waitMs: settings.requestTimeoutMs,
++        });
++        if (!lease) {
++          res.status(503).json({ code: 'UNAVAILABLE' });
++          return;
++        }
++        const session = await authorized(req);
++        if (!session) {
++          res.status(404).json({ code: 'UNAVAILABLE' });
++          return;
++        }
++        if (action === 'heartbeat') {
++          await store.set(key(session.id), session, settings.sessionTtlMs);
++          res.sendStatus(204);
++          return;
++        }
++        if (action === 'remove') {
++          await store.delete(key(session.id));
++          res.sendStatus(204);
++          return;
++        }
++        const requestId = req.params.requestId;
++        if (typeof requestId !== 'string' || !z.uuid().safeParse(requestId).success) {
++          res.status(400).json({ code: 'INVALID_REQUEST' });
++          return;
++        }
++        const pending = await store.get<Pending>(pendingKey(requestId));
++        const parsed = localFilesResultSchema.safeParse(req.body);
++        if (!pending || pending.sessionId !== session.id || pending.expiresAt <= Date.now()) {
++          res.status(409).json({ code: 'REVIEW_EXPIRED' });
++          return;
++        }
++        if (
++          !parsed.success ||
++          (parsed.data.ok &&
++            (Buffer.byteLength(parsed.data.value.content ?? '', 'utf8') > settings.maxTextBytes ||
++              (parsed.data.value.entries?.length ?? 0) > settings.pageSize))
++        ) {
++          res.status(400).json({ code: 'INVALID_REQUEST' });
++          return;
++        }
++        const completed = await flows.completeFlowIfCurrent(
++          requestId,
++          'local_files',
++          pending.createdAt,
++          requestId,
++          parsed.data,
++        );
++        if (completed === 'updated') waiters.get(requestId)?.(parsed.data);
++        res.sendStatus(204);
++      } catch (error) {
++        logger.error('[Local files] Request failed', getSafeErrorMetadata(error));
++        res.status(503).json({ code: 'UNAVAILABLE' });
++      } finally {
++        await lease
++          ?.release()
++          .catch((error: unknown) =>
++            logger.error('[Local files] Lease release failed', getSafeErrorMetadata(error)),
++          );
++      }
++    }
++    return {
++      create: (req: Request, res: Response) => handle(req, res, 'create'),
++      heartbeat: (req: Request, res: Response) => handle(req, res, 'heartbeat'),
++      result: (req: Request, res: Response) => handle(req, res, 'result'),
++      remove: (req: Request, res: Response) => handle(req, res, 'remove'),
++    };
++  }
++  function bind({ req, runId, config, streamId, jobCreatedAt, transport }: BindingOptions) {
++    const id = req.body.localFilesSessionId;
++    if (
++      !id ||
++      !req.user?.id ||
++      req._isScheduledFire === true ||
++      !localFilesAvailable(config) ||
++      !streamId ||
++      jobCreatedAt == null
++    )
++      return;
++    const settings = localFilesConfigSchema.parse(config.config?.localFiles);
++    const principal = { id: req.user.id, tenantId: req.user.tenantId };
++    return {
++      sessionId: id,
++      config: settings,
++      decisions: req.body.decisions ?? [],
++      root: async (conversationId: string) => (await get(id, principal, conversationId))?.root,
++      invoke: (input: Parameters<typeof invoke>[0]['command'], signal: AbortSignal) =>
++        invoke({
++          principal,
++          sessionId: id,
++          command: { ...input, runId },
++          config: settings,
++          signal,
++          send: (command) =>
++            transport.emitChunk(
++              streamId,
++              { event: LOCAL_FILES_EVENT, data: command },
++              { expectedCreatedAt: jobCreatedAt, durable: true },
++            ),
++        }),
++    };
++  }
++  return { router, bind, get, invoke };
++}
++type Command = Omit<LocalFilesCommand, 'id' | 'expiresAt' | 'version' | 'rootId' | 'sessionId'>;
++interface Invocation {
++  principal: LocalFilesPrincipal;
++  sessionId: string;
++  command: Command;
++  config: LocalFilesConfig;
++  send: (command: LocalFilesCommand) => void | Promise<void>;
++  signal: AbortSignal;
++}
++export interface LocalFilesBinding {
++  sessionId: string;
++  config: LocalFilesConfig;
++  decisions: Agents.ToolApprovalResolution[];
++  root: (conversationId: string) => Promise<LocalFilesRoot | undefined>;
++  invoke: (command: Command, signal: AbortSignal) => Promise<LocalFilesResult>;
++}
++interface BindingOptions {
++  req: ServerRequest & { _isScheduledFire?: boolean };
++  runId: string;
++  config: AppConfig;
++  streamId?: string;
++  jobCreatedAt?: number;
++  transport: {
++    emitChunk: (
++      streamId: string,
++      event: { event: typeof LOCAL_FILES_EVENT; data: LocalFilesCommand },
++      options: { expectedCreatedAt: number; durable: boolean },
++    ) => Promise<void>;
++  };
++}
++interface LocalFilesService {
++  router: () => Record<
++    'create' | 'heartbeat' | 'result' | 'remove',
++    (req: Request, res: Response) => Promise<void>
++  >;
++  bind: (options: BindingOptions) => LocalFilesBinding | undefined;
++  get: (
++    id: string,
++    principal: LocalFilesPrincipal,
++    conversationId?: string,
++  ) => Promise<Session | undefined>;
++  invoke: (options: Invocation) => Promise<LocalFilesResult>;
++}
+diff --git a/packages/api/src/flow/manager.ts b/packages/api/src/flow/manager.ts
+index c11557b8264e70e8a44940dc39ae11f2829d3ca1..6241a4404b1c404443c7d1987a2a257afc5e4824 100644
+--- a/packages/api/src/flow/manager.ts
++++ b/packages/api/src/flow/manager.ts
+@@ -8,6 +8,9 @@ import { math } from '~/utils/math';
+ 
+ type GuardedMutationResult = 'updated' | 'stale' | 'missing';
+ 
++/** Cancels a redundant observer after another authorized completion channel settled it. */
++export const FLOW_MONITOR_SETTLED: unique symbol = Symbol('flowMonitorSettled');
++
+ export interface FlowLease {
+   generation: number;
+   release: () => Promise<void>;
+@@ -772,7 +775,8 @@ export class FlowStateManager<T = unknown> {
+       // Immediate abort handler - responds instantly to abort signal
+       const abortHandler = async () => {
+         cleanup();
+-        logger.warn(`[${flowKey}] Flow aborted (immediate)`);
++        if (signal?.reason !== FLOW_MONITOR_SETTLED)
++          logger.warn(`[${flowKey}] Flow aborted (immediate)`);
+         const message = `${type} flow aborted`;
+         if (ownsFlow) {
+           try {
+@@ -823,7 +827,7 @@ export class FlowStateManager<T = unknown> {
+ 
+           if (signal?.aborted) {
+             cleanup();
+-            logger.warn(`[${flowKey}] Flow aborted`);
++            if (signal.reason !== FLOW_MONITOR_SETTLED) logger.warn(`[${flowKey}] Flow aborted`);
+             const message = `${type} flow aborted`;
+             if (ownsFlow) {
+               await this.keyv.delete(flowKey);
+diff --git a/packages/api/src/index.ts b/packages/api/src/index.ts
+index 8eef3101d0007d25ddeacf296b2a2576118bb0e1..5dfb47b110b828f06f3d0c69c53e95690618dc7e 100644
+--- a/packages/api/src/index.ts
++++ b/packages/api/src/index.ts
+@@ -113,6 +113,7 @@ export * from './plugins';
+ export * from './endpoints';
+ /* Files */
+ export * from './files';
++export * from './filesystem';
+ /* Images */
+ export * from './images';
+ /* Storage */
+diff --git a/packages/api/src/types/http.ts b/packages/api/src/types/http.ts
+index b6495b52ea014c687a30f4d9924738727e81eb2a..208966c0e8d24bbff0ccf005f495718d0502fca0 100644
+--- a/packages/api/src/types/http.ts
++++ b/packages/api/src/types/http.ts
+@@ -17,6 +17,8 @@ import type { BranchLinks } from '../messages/history';
+  * (have to use type alias because you can't extend indexed access types like Request['body'])
+  */
+ export type RequestBody = {
++  localFilesSessionId?: string;
++  decisions?: Agents.ToolApprovalResolution[];
+   /** Server-assigned MCP tool owner; overwrite browser input at tool construction and invocation. */
+   agentId?: string;
+   messageId?: string;
+diff --git a/packages/chat/src/components/approval/Review.tsx b/packages/chat/src/components/approval/Review.tsx
+index 72ec7d6d6106f9c64f799576d22d86360dd2f808..55243973b63894bfd71d3014c08a9c5ee9698500 100644
+--- a/packages/chat/src/components/approval/Review.tsx
++++ b/packages/chat/src/components/approval/Review.tsx
+@@ -18,6 +18,7 @@ export type ApprovalReviewCopy = {
+ 
+ /** One paused call, drawn by the host's tool-approval card. */
+ export type ApprovalRequestRenderProps = {
++  name?: string;
+   approval: NonNullable<Agents.ToolCall['approval']>;
+   toolCallId: string;
+   args: Agents.ToolApprovalRequest['arguments'];
+@@ -210,6 +211,7 @@ export const PendingToolApprovalPanel: MemoExoticComponent<
+               )}
+               {config != null ? (
+                 renderRequest({
++                  name: request.name,
+                   approval: {
+                     actionId: pendingAction.actionId,
+                     allowed_decisions: config.allowed_decisions,
+diff --git a/packages/chat/src/core/__tests__/frames.spec.ts b/packages/chat/src/core/__tests__/frames.spec.ts
+index 867a34b504ba26a1968cc63d3e05541462c5a1ad..f439bbb6e244a3081f2fbe9b1d97b4506078c964 100644
+--- a/packages/chat/src/core/__tests__/frames.spec.ts
++++ b/packages/chat/src/core/__tests__/frames.spec.ts
+@@ -4,6 +4,7 @@ import {
+   SteerEvents,
+   ContentTypes,
+   ApprovalEvents,
++  LOCAL_FILES_EVENT,
+   ActivityLabelEvents,
+   ReasoningLabelEvents,
+ } from 'librechat-data-provider';
+@@ -42,6 +43,7 @@ describe('normalizeFrame', () => {
+   it('unwraps the named side channels to their payload', () => {
+     const cases: Array<[string, string]> = [
+       ['attachment', 'attachment'],
++      [LOCAL_FILES_EVENT, 'local_file_request'],
+       [UsageEvents.ON_CONTEXT_USAGE, 'context_usage'],
+       [UsageEvents.ON_TOKEN_USAGE, 'token_usage'],
+       [ApprovalEvents.ON_PENDING_ACTION, 'pending_action'],
+diff --git a/packages/chat/src/core/resumable/frames.ts b/packages/chat/src/core/resumable/frames.ts
+index 084f0b1ddbaa74318e99a19dc7f731688c7ad37e..c848547d98e354425ccb2cb61a67ecc58b71bed0 100644
+--- a/packages/chat/src/core/resumable/frames.ts
++++ b/packages/chat/src/core/resumable/frames.ts
+@@ -196,6 +196,10 @@ export async function handleFrame(ctx: StreamContext, event: ChatEvent): Promise
+       return;
+     }
+ 
++    if (event.type === 'local_file_request') {
++      host.events.localFileHandler?.(event.data);
++      return;
++    }
+     if (event.type === 'title') {
+       host.events.titleHandler(event.data);
+       return;
+diff --git a/packages/chat/src/core/resumable/host.ts b/packages/chat/src/core/resumable/host.ts
+index 25cdd9ee1bfec46904c95537356bf48ee7cbb9c6..35a8fe213238081877ecc5c78dea082318e29d4b 100644
+--- a/packages/chat/src/core/resumable/host.ts
++++ b/packages/chat/src/core/resumable/host.ts
+@@ -16,6 +16,7 @@ import type {
+   TTokenUsageEvent,
+   TContextUsageEvent,
+   TSteerUpdatedEvent,
++  LocalFilesCommand,
+ } from 'librechat-data-provider';
+ import type { GenerationProtocolVersion } from '../protocol';
+ import type { RunEnd } from '../steer/types';
+@@ -272,6 +273,8 @@ export interface ResumablePane {
+ 
+ /** What the event handlers that render the stream expose to the run. */
+ export interface ResumableEvents {
++  /** Host-owned execution; this package never holds a filesystem handle. */
++  localFileHandler?: (command: LocalFilesCommand) => void;
+   stepHandler: (event: StepEvent, submission: EventSubmission) => void;
+   finalHandler: (data: ChatFinalFrame, submission: EventSubmission) => void;
+   createdHandler: (data: ChatCreatedFrame, submission: EventSubmission) => void;
+diff --git a/packages/chat/src/core/resumable/sync.ts b/packages/chat/src/core/resumable/sync.ts
+index e80a735d483a09ae379a03523f6f1b06da6dad7a..74d4c45f7276972114a7d5e74d2f17aaea0f1131 100644
+--- a/packages/chat/src/core/resumable/sync.ts
++++ b/packages/chat/src/core/resumable/sync.ts
+@@ -237,6 +237,8 @@ export function handleSync(ctx: StreamContext, data: ChatSyncFrame): void {
+       }
+       if (pendingEvent.event === 'title') {
+         host.events.titleHandler(pendingEvent);
++      } else if (pendingEvent.event === 'on_local_file_request') {
++        host.events.localFileHandler?.(pendingEvent.data);
+       } else if (pendingEvent.event === UsageEvents.ON_CONTEXT_USAGE) {
+         host.usage.contextHandler(pendingEvent.data, resumeSubmission);
+       } else if (pendingEvent.event === UsageEvents.ON_TOKEN_USAGE) {
+diff --git a/packages/chat/src/core/transport/frames.ts b/packages/chat/src/core/transport/frames.ts
+index 37f2c51268aabc7cc8c13cd61c91dd1d9927a4e8..b644623af173908efaabd212ecb8da8ee2355e8b 100644
+--- a/packages/chat/src/core/transport/frames.ts
++++ b/packages/chat/src/core/transport/frames.ts
+@@ -29,6 +29,8 @@ type FrameKeys = {
+ 
+ function normalizeEventFrame(frame: ChatEventFrame): ChatEvent {
+   switch (frame.event) {
++    case 'on_local_file_request':
++      return { type: 'local_file_request', data: frame.data };
+     case 'title':
+       return { type: 'title', data: frame };
+     case 'attachment':
+diff --git a/packages/data-provider/src/config.ts b/packages/data-provider/src/config.ts
+index 1f6c83211c5657ca54c38201fd4e745f8a4d3d14..668a7991f491f3a449bc20e64cf141515370bff8 100644
+--- a/packages/data-provider/src/config.ts
++++ b/packages/data-provider/src/config.ts
+@@ -1,6 +1,7 @@
+ import { z } from 'zod';
+ import type { ZodError } from 'zod';
+ import type { TEndpointsConfig, TModelsConfig, TConfig } from './types';
++import type { LocalFilesConfig } from './filesystem';
+ import {
+   MAX_SUBAGENTS,
+   MAX_SUBAGENTS_CEILING,
+@@ -39,6 +40,7 @@ import {
+   eReasoningResponseKeySchema,
+ } from './schemas';
+ import { runGrantResourceBindingSchema } from './types/runGrant';
++import { localFilesConfigSchema } from './filesystem';
+ import { partialWithoutDefaults } from './zod';
+ 
+ export const tenantIdSchema = z
+@@ -4142,6 +4144,7 @@ export function supportsConversationTitleOwnership(config?: {
+ }
+ 
+ export type TStartupConfig = {
++  localFiles?: LocalFilesConfig & { version: 1; available: boolean };
+   conversationTitleOwnershipVersion?: typeof CONVERSATION_TITLE_OWNERSHIP_VERSION;
+   appTitle: string;
+   socialLogins?: string[];
+@@ -4978,6 +4981,7 @@ export const DEFAULT_CONFIG_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+ export const DEFAULT_CONFIG_CACHE_MAX_ENTRIES = 1000;
+ 
+ export const configSchema = z.object({
++  localFiles: localFilesConfigSchema.optional(),
+   persistence: persistenceConfigSchema,
+   version: z.string(),
+   telemetry: telemetrySchema.optional(),
+@@ -5991,6 +5995,7 @@ export enum ErrorTypes {
+    * A conversation's selected attached workspace cannot be used as requested.
+    */
+   CODE_WORKSPACE_UNAVAILABLE = 'code_workspace_unavailable',
++  LOCAL_FILES_UNAVAILABLE = 'local_files_unavailable',
+   /**
+    * Invalid Agent Provider (excluded by Admin)
+    */
+diff --git a/packages/data-provider/src/data-service.ts b/packages/data-provider/src/data-service.ts
+index f673857513e690b2e58924217dd79fe31a4adfb5..0ce8d77daffa19661454b9546c33574256576aef 100644
+--- a/packages/data-provider/src/data-service.ts
++++ b/packages/data-provider/src/data-service.ts
+@@ -2375,3 +2375,9 @@ export function revokeAgentEventSubscriptionGrant(
+     data: { expectedRevision },
+   });
+ }
++export {
++  createLocalFilesSession,
++  heartbeatLocalFiles,
++  completeLocalFiles,
++  disconnectLocalFiles,
++} from './filesystem-service';
+diff --git a/packages/data-provider/src/filesystem-service.spec.ts b/packages/data-provider/src/filesystem-service.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..4658c1c5667916b8cac69f6177769461fa17e4ba
+--- /dev/null
++++ b/packages/data-provider/src/filesystem-service.spec.ts
+@@ -0,0 +1,49 @@
++import axios, { AxiosError } from 'axios';
++import type { LocalFilesSession } from './filesystem';
++import { completeLocalFiles, LocalFilesTransportError } from './filesystem-service';
++import { localFilesConfigSchema } from './filesystem';
++
++const adapter = axios.defaults.adapter;
++const session: LocalFilesSession = {
++  id: 'session',
++  token: 'private-session-token',
++  version: 1,
++  root: { id: 'root', name: 'workspace', access: 'read' },
++  config: localFilesConfigSchema.parse({}),
++};
++afterEach(() => {
++  axios.defaults.adapter = adapter;
++});
++it('discards transport diagnostics, request credentials and file text before React Query sees a failure', async () => {
++  axios.defaults.adapter = async (config) => {
++    throw new AxiosError(
++      'password=diagnostic-secret',
++      'ERR_BAD_RESPONSE',
++      config,
++      {},
++      {
++        status: 503,
++        statusText: 'unavailable',
++        config,
++        headers: {},
++        data: { code: 'UNAVAILABLE', detail: 'private-response-secret' },
++      },
++    );
++  };
++  const error = await completeLocalFiles(session, 'request', {
++    ok: true,
++    value: { path: 'note.txt', content: 'private-file-text' },
++  }).catch((error: Error) => error);
++  expect(error).toBeInstanceOf(LocalFilesTransportError);
++  expect(error).toMatchObject({ code: 'UNAVAILABLE', message: 'UNAVAILABLE' });
++  expect(JSON.stringify(error)).not.toMatch(/private|password|config|response|headers/);
++  expect(Object.getOwnPropertyNames(error)).not.toContain('cause');
++});
++it('maps unapproved upstream messages to a safe stable code', async () => {
++  axios.defaults.adapter = async (config) => {
++    throw new AxiosError('arbitrary secret', undefined, config);
++  };
++  await expect(
++    completeLocalFiles(session, 'request', { ok: false, error: { code: 'CANCELLED' } }),
++  ).rejects.toMatchObject({ code: 'UNAVAILABLE', message: 'UNAVAILABLE' });
++});
+diff --git a/packages/data-provider/src/filesystem-service.ts b/packages/data-provider/src/filesystem-service.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e8b7f5ae8c491c2fc593e33286930fdc0f8919d2
+--- /dev/null
++++ b/packages/data-provider/src/filesystem-service.ts
+@@ -0,0 +1,56 @@
++import { z } from 'zod';
++import axios, { isAxiosError } from 'axios';
++import type { AxiosResponse } from 'axios';
++import type { LocalFilesRoot, LocalFilesSession, LocalFilesResult } from './filesystem';
++import { LOCAL_FILES_HEADER, LOCAL_FILES_VERSION, LOCAL_FILES_ERRORS } from './filesystem';
++import { apiBaseUrl } from './api-endpoints';
++
++const url = (id?: string): string =>
++  `${apiBaseUrl()}/api/local-files/sessions${id ? `/${encodeURIComponent(id)}` : ''}`;
++const options = (token: string) => ({ headers: { [LOCAL_FILES_HEADER]: token } });
++export class LocalFilesTransportError extends Error {
++  constructor(public readonly code: (typeof LOCAL_FILES_ERRORS)[number]) {
++    super(code);
++  }
++}
++const errorSchema = z.object({ code: z.enum(LOCAL_FILES_ERRORS) });
++/** React Query and console capture must never retain an Axios request containing file text or credentials. */
++async function send<T>(invoke: () => Promise<AxiosResponse<T>>): Promise<T> {
++  try {
++    return (await invoke()).data;
++  } catch (error) {
++    const parsed = errorSchema.safeParse(isAxiosError(error) ? error.response?.data : undefined);
++    throw new LocalFilesTransportError(parsed.success ? parsed.data.code : 'UNAVAILABLE');
++  }
++}
++export async function createLocalFilesSession(
++  conversationId: string,
++  root: LocalFilesRoot,
++): Promise<LocalFilesSession> {
++  return send(() =>
++    axios.post<LocalFilesSession>(url(), {
++      version: LOCAL_FILES_VERSION,
++      conversationId,
++      root,
++    }),
++  );
++}
++export async function heartbeatLocalFiles(session: LocalFilesSession): Promise<void> {
++  await send(() => axios.post(`${url(session.id)}/heartbeat`, {}, options(session.token)));
++}
++export async function completeLocalFiles(
++  session: LocalFilesSession,
++  id: string,
++  result: LocalFilesResult,
++): Promise<void> {
++  await send(() =>
++    axios.post(
++      `${url(session.id)}/results/${encodeURIComponent(id)}`,
++      result,
++      options(session.token),
++    ),
++  );
++}
++export async function disconnectLocalFiles(session: LocalFilesSession): Promise<void> {
++  await send(() => axios.delete(url(session.id), options(session.token)));
++}
+diff --git a/packages/data-provider/src/filesystem.spec.ts b/packages/data-provider/src/filesystem.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..36f229e82380f2bf1d33f57df6d293f676b1103d
+--- /dev/null
++++ b/packages/data-provider/src/filesystem.spec.ts
+@@ -0,0 +1,51 @@
++import {
++  localFilesConfigSchema,
++  localFilesInputSchema,
++  localFilesPathSchema,
++  localFilesResultSchema,
++  serializeLocalFiles,
++} from './filesystem';
++
++describe('local file contracts', () => {
++  it.each([
++    '/etc/passwd',
++    '../secret',
++    'a/../secret',
++    'C:/secret',
++    'C:\\secret',
++    '\\\\host\\share',
++    'a//b',
++    './file',
++    'a\0b',
++  ])('rejects an escaping or ambiguous path: %s', (path) => {
++    expect(localFilesPathSchema.safeParse(path).success).toBe(false);
++  });
++  it.each(['', 'notes.txt', 'پروژه/یادداشت.txt', 'src/a.ts'])(
++    'accepts an explicit relative path: %s',
++    (path) => {
++      expect(localFilesPathSchema.safeParse(path).success).toBe(true);
++    },
++  );
++  it('preserves existing behavior until explicitly enabled', () => {
++    expect(localFilesConfigSchema.parse({}).enabled).toBe(false);
++  });
++  it('canonicalizes property order and defaults before review hashing', () => {
++    expect(serializeLocalFiles({ operation: 'list', path: '', cursor: 0 })).toBe(
++      serializeLocalFiles(localFilesInputSchema.parse({ path: '', operation: 'list' })),
++    );
++  });
++  it('does not accept a shell, deletion, unknown parameters, or raw error diagnostics', () => {
++    expect(
++      localFilesInputSchema.safeParse({ operation: 'execute', path: 'a', command: 'rm' }).success,
++    ).toBe(false);
++    expect(
++      localFilesInputSchema.safeParse({ operation: 'read', path: 'a', command: 'rm' }).success,
++    ).toBe(false);
++    expect(
++      localFilesResultSchema.safeParse({
++        ok: false,
++        error: { code: 'FAILED', message: 'password=secret' },
++      }).success,
++    ).toBe(false);
++  });
++});
+diff --git a/packages/data-provider/src/filesystem.ts b/packages/data-provider/src/filesystem.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..d49aa0e83492338df7ace788bb37c15b6988ffa5
+--- /dev/null
++++ b/packages/data-provider/src/filesystem.ts
+@@ -0,0 +1,183 @@
++import { z } from 'zod';
++
++export const LOCAL_FILES_VERSION = 1 as const;
++export const LOCAL_FILES_EVENT = 'on_local_file_request' as const;
++export const LOCAL_FILES_HEADER = 'X-Local-Files-Token';
++
++export const localFilesConfigSchema = z
++  .object({
++    enabled: z.boolean().default(false),
++    maxTextBytes: z
++      .number()
++      .int()
++      .min(1)
++      .max(16 * 1024 * 1024)
++      .default(1024 * 1024),
++    maxMoveBytes: z
++      .number()
++      .int()
++      .min(1)
++      .max(256 * 1024 * 1024)
++      .default(16 * 1024 * 1024),
++    pageSize: z.number().int().min(1).max(1000).default(200),
++    requestTimeoutMs: z.number().int().min(1000).max(300000).default(60000),
++    sessionTtlMs: z.number().int().min(15000).max(300000).default(60000),
++  })
++  .strict();
++export type LocalFilesConfig = z.infer<typeof localFilesConfigSchema>;
++
++export const localFilesRootSchema = z
++  .object({
++    id: z.uuid(),
++    name: z.string().min(1).max(255),
++    access: z.enum(['read', 'readwrite']),
++  })
++  .strict();
++export type LocalFilesRoot = z.infer<typeof localFilesRootSchema>;
++
++/** Paths are relative to a browser-held directory handle, never host paths. */
++export const localFilesPathSchema = z
++  .string()
++  .max(4096)
++  .refine(
++    (path) =>
++      path === '' ||
++      (!/[\\:]/.test(path) &&
++        !path.includes('\0') &&
++        path.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..')),
++    'A relative path inside the selected folder is required',
++  );
++const file = localFilesPathSchema.refine((path) => path.length > 0);
++export const localFilesInputSchema = z.discriminatedUnion('operation', [
++  z
++    .object({
++      operation: z.literal('list'),
++      path: localFilesPathSchema,
++      cursor: z.number().int().nonnegative().default(0),
++    })
++    .strict(),
++  z.object({ operation: z.literal('read'), path: file }).strict(),
++  z.object({ operation: z.literal('write'), path: file, content: z.string() }).strict(),
++  z
++    .object({
++      operation: z.literal('edit'),
++      path: file,
++      edits: z
++        .array(z.object({ oldText: z.string().min(1), newText: z.string() }).strict())
++        .min(1)
++        .max(100),
++    })
++    .strict(),
++  z.object({ operation: z.literal('mkdir'), path: file }).strict(),
++  z.object({ operation: z.literal('move'), path: file, destination: file }).strict(),
++]);
++export type LocalFilesInput = z.infer<typeof localFilesInputSchema>;
++export type LocalFilesOperation = LocalFilesInput['operation'];
++export const LOCAL_FILES_TOOLS: Record<LocalFilesOperation, string> = {
++  list: 'local_list',
++  read: 'local_read',
++  write: 'local_write',
++  edit: 'local_edit',
++  mkdir: 'local_mkdir',
++  move: 'local_move',
++};
++export function localFilesMutation(operation: LocalFilesOperation): boolean {
++  return operation !== 'list' && operation !== 'read';
++}
++export function localFilesOperation(name: string): LocalFilesOperation | undefined {
++  return (Object.keys(LOCAL_FILES_TOOLS) as LocalFilesOperation[]).find(
++    (key) => LOCAL_FILES_TOOLS[key] === name,
++  );
++}
++
++export const localFilesReviewSchema = z
++  .object({
++    id: z.uuid(),
++    sessionId: z.uuid(),
++    digest: z.string().regex(/^[a-f0-9]{64}$/),
++    before: z
++      .array(
++        z
++          .object({
++            path: file,
++            hash: z
++              .string()
++              .regex(/^[a-f0-9]{64}$/)
++              .nullable(),
++          })
++          .strict(),
++      )
++      .max(2),
++  })
++  .strict();
++export type LocalFilesReview = z.infer<typeof localFilesReviewSchema>;
++
++export const LOCAL_FILES_ERRORS = [
++  'UNAVAILABLE',
++  'INVALID_REQUEST',
++  'PERMISSION_DENIED',
++  'NOT_FOUND',
++  'UNSUPPORTED_TEXT',
++  'TOO_LARGE',
++  'CONFLICT',
++  'REVIEW_REQUIRED',
++  'REVIEW_EXPIRED',
++  'CANCELLED',
++  'TIMEOUT',
++  'EXECUTION_UNCERTAIN',
++  'COPY_RETAINED',
++  'FAILED',
++] as const;
++export const localFilesResultSchema = z.discriminatedUnion('ok', [
++  z
++    .object({
++      ok: z.literal(true),
++      value: z
++        .object({
++          path: z.string(),
++          content: z.string().optional(),
++          entries: z
++            .array(z.object({ name: z.string(), kind: z.enum(['file', 'directory']) }).strict())
++            .optional(),
++          nextCursor: z.number().int().nonnegative().optional(),
++        })
++        .strict(),
++    })
++    .strict(),
++  z
++    .object({
++      ok: z.literal(false),
++      error: z.object({ code: z.enum(LOCAL_FILES_ERRORS) }).strict(),
++    })
++    .strict(),
++]);
++export type LocalFilesResult = z.infer<typeof localFilesResultSchema>;
++export const localFilesCommandSchema = z
++  .object({
++    version: z.literal(LOCAL_FILES_VERSION),
++    id: z.uuid(),
++    sessionId: z.uuid(),
++    rootId: z.uuid(),
++    conversationId: z.string(),
++    runId: z.string().min(1),
++    toolCallId: z.string().min(1),
++    input: localFilesInputSchema,
++    review: localFilesReviewSchema.optional(),
++    expiresAt: z.number(),
++    cancelled: z.literal(true).optional(),
++  })
++  .strict();
++export type LocalFilesCommand = z.infer<typeof localFilesCommandSchema>;
++export interface LocalFilesSession {
++  id: string;
++  token: string;
++  root: LocalFilesRoot;
++  config: LocalFilesConfig;
++  version: typeof LOCAL_FILES_VERSION;
++}
++
++/** Stable serialization shared by the proposal UI and the execution boundary. */
++export function serializeLocalFiles(input: LocalFilesInput): string {
++  const parsed = localFilesInputSchema.parse(input);
++  return JSON.stringify(parsed);
++}
+diff --git a/packages/data-provider/src/index.ts b/packages/data-provider/src/index.ts
+index f9cff5676f53fe8a1e51d6bb3eaf1e208e141b16..e5c56ec4b5f410a4429427ceefb5edc1e7ebef48 100644
+--- a/packages/data-provider/src/index.ts
++++ b/packages/data-provider/src/index.ts
+@@ -115,6 +115,8 @@ export * from './types/runGrant';
+ export * from './types/dead';
+ 
+ export * from './approval';
++export * from './filesystem';
++export { LocalFilesTransportError } from './filesystem-service';
+ export * from './types/channels';
+ export * from './types/responseReview';
+ export * from './types/channelIdentity';
+diff --git a/packages/data-provider/src/keys.ts b/packages/data-provider/src/keys.ts
+index 0eebb798aee1c757b19159d381a3fb8f1a80b80b..9a49f63480bface70a7708b51fd1d01fbf379a30 100644
+--- a/packages/data-provider/src/keys.ts
++++ b/packages/data-provider/src/keys.ts
+@@ -1,4 +1,5 @@
+ export enum QueryKeys {
++  localFiles = 'localFiles',
+   slackApps = 'slackApps',
+   slackWorkspaces = 'slackWorkspaces',
+   agentChannelWorkspaceRoutes = 'agentChannelWorkspaceRoutes',
+@@ -157,6 +158,8 @@ export const DynamicQueryKeys = {
+ } as const;
+ 
+ export enum MutationKeys {
++  localFilesSession = 'localFilesSession',
++  localFilesResult = 'localFilesResult',
+   slackApps = 'slackApps',
+   slackWorkspaces = 'slackWorkspaces',
+   agentChannelWorkspaceRoutes = 'agentChannelWorkspaceRoutes',
+diff --git a/packages/data-provider/src/types.ts b/packages/data-provider/src/types.ts
+index cd6e409b0a936bc91f98d676786c3b81bd9a7c84..028138f0ddf746d28f15933f2d286863bd456915 100644
+--- a/packages/data-provider/src/types.ts
++++ b/packages/data-provider/src/types.ts
+@@ -145,6 +145,7 @@ export type TEphemeralAgent = {
+ 
+ export type TPayload = Partial<TMessage> &
+   Partial<TEndpointOption> & {
++    localFilesSessionId?: string;
+     isContinued: boolean;
+     isRegenerate?: boolean;
+     /** Manual context compaction: summarize the branch up to `parentMessageId`
+diff --git a/packages/data-provider/src/types/agents.ts b/packages/data-provider/src/types/agents.ts
+index 0c4b20d232a5ed942e1aec8f040e5d2e1afc7241..0a1c108b7d6cf3dd9d75247e48a9a0a4712629db 100644
+--- a/packages/data-provider/src/types/agents.ts
++++ b/packages/data-provider/src/types/agents.ts
+@@ -17,6 +17,7 @@ import type {
+ import type { TPromptGroupSource, NativePromptSelection, LangfusePromptSelection } from '../types';
+ import type { TTokenUsageEvent, TContextUsageEvent, TPendingSteer } from './runs';
+ import type { StatefulCodeEnvironment } from '../stateful-code';
++import type { LocalFilesReview } from '../filesystem';
+ import type { SummaryContentPart } from './content';
+ import type { TFile } from './files';
+ import { StepTypes, ContentTypes, ToolCallTypes } from './runs';
+@@ -687,6 +688,7 @@ export namespace Agents {
+    * - `scope` defaults to `'once'`.
+    */
+   export interface ToolApprovalResolution {
++    localFiles?: LocalFilesReview;
+     tool_call_id: string;
+     decision: ToolApprovalDecisionType;
+     editedArguments?: Record<string, unknown>;
+diff --git a/packages/data-provider/src/types/transport.ts b/packages/data-provider/src/types/transport.ts
+index 3385520bfe04dc638f498f67b6235b1a3d7e110f..3ac4d081a81850f4a63bbd079675c786f9a0dfbf 100644
+--- a/packages/data-provider/src/types/transport.ts
++++ b/packages/data-provider/src/types/transport.ts
+@@ -18,6 +18,7 @@ import type {
+   TReasoningLabelAttemptEvent,
+ } from './runs';
+ import type { TMessage, TPayload, TConversation, TEditedContent } from '../types';
++import type { LocalFilesCommand } from '../filesystem';
+ import type { TPromotedSteer } from './queuedTurns';
+ import type { StreamContentData } from './content';
+ import type { TAttachment } from '../schemas';
+@@ -146,6 +147,7 @@ export type ChatStepFrame =
+ 
+ /** Any `{ event, data }` frame: step events plus the named side channels. */
+ export type ChatEventFrame =
++  | { event: 'on_local_file_request'; data: LocalFilesCommand }
+   | ChatTitleFrame
+   | ChatStepFrame
+   | { event: 'attachment'; data: ChatAttachment }
+@@ -212,6 +214,7 @@ export type ChatErrorData =
+  * `UIMessageChunk`; the equivalents are noted per member where one exists.
+  */
+ export type ChatEvent =
++  | { type: 'local_file_request'; data: LocalFilesCommand }
+   /** The connection opened. No AI SDK chunk; the SDK tracks this as `status: 'submitted'`. */
+   | { type: 'open' }
+   /** AI SDK: `start` (carries `messageId`). */

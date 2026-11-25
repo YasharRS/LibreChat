@@ -283,6 +283,8 @@ it.each([
   '/api/auth/login',
   '/api/local-files/sessions',
   '/api/local-files/sessions/session-123/heartbeat',
+  '/api/local-files/sessions/session-123/render',
+  '/app/api/local-files/sessions/session-123/render',
   '/api/local-files/sessions/session-123/results/request-123',
   '/app/api/local-files/sessions/session-123',
   '/api/auth/register',

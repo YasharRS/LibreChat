@@ -5,6 +5,8 @@ import {
   localFilesResultSchema,
   localFilesFormat,
   serializeLocalFiles,
+  localFilesWriteSize,
+  localFilesCommandSchema,
 } from './filesystem';
 
 describe('local file contracts', () => {
@@ -29,6 +31,31 @@ describe('local file contracts', () => {
   );
   it('preserves existing behavior until explicitly enabled', () => {
     expect(localFilesConfigSchema.parse({}).enabled).toBe(false);
+    expect(localFilesConfigSchema.parse({}).requireReview).toBe(true);
+  });
+  it('accepts explicit binary writes of any format and measures decoded bytes', () => {
+    const input = {
+      operation: 'write' as const,
+      path: 'archive.zip',
+      content: 'AAGA/w==',
+      encoding: 'base64' as const,
+    };
+    expect(localFilesInputSchema.parse(input)).toEqual(input);
+    expect(localFilesWriteSize(input)).toBe(4);
+    expect(localFilesWriteSize({ ...input, content: '' })).toBe(0);
+    for (const content of [
+      'abc',
+      'ab=c',
+      'a===',
+      'abcd====',
+      'data:application/pdf;base64,AA==',
+      'AA==\n',
+    ])
+      expect(localFilesWriteSize({ ...input, content })).toBeNull();
+    expect(localFilesWriteSize({ ...input, content: 'سلام', encoding: 'utf8' })).toBe(8);
+  });
+  it('rejects commands from older protocol versions', () => {
+    expect(localFilesCommandSchema.safeParse({ version: 2 }).success).toBe(false);
   });
   it('recognizes document/image extensions without treating filenames or MIME hints as executable content', () => {
     expect(localFilesFormat('folder/REPORT.PDF')).toEqual(['pdf', 'application/pdf']);

@@ -1,0 +1,53 @@
+{
+  "packageChecks": {
+    "shellSyntax": "passed",
+    "bashDryRun": "passed",
+    "powershellDryRun": "passed",
+    "bashInstallExactTree": "passed",
+    "powershellInstallExactTree": "passed",
+    "repeatInstallRefused": "passed",
+    "reversePatchRestoresBaseTree": "passed",
+    "realWorkingTreeAndIndexPreserved": "passed"
+  },
+  "featureChecksPreviouslyRunOnSource": {
+    "checkedAt": "2026-11-25T16:47:35.188Z",
+    "source": "Protocol-v3 export snapshot; source head 40606661aea380aee112705c028ef23a21215764",
+    "focusedJest": {
+      "status": "passed",
+      "api": {
+        "suites": 4,
+        "tests": 42
+      },
+      "dataProvider": {
+        "suites": 2,
+        "tests": 23
+      },
+      "client": {
+        "suites": 6,
+        "tests": 168
+      },
+      "totalTests": 233
+    },
+    "browserWorkflow": {
+      "status": "incomplete",
+      "profile": "reviewed writes and document/image reads",
+      "reason": "Run interrupted before final result; MongoDB logged free disk below its 500 MiB minimum.",
+      "directWriteProfile": "not run"
+    },
+    "productionRuntime": {
+      "status": "Existing local protocol-v3 build started; /readyz, banner route and 70 frontend assets returned HTTP 200 in preceding startup check.",
+      "rebuiltForThisExport": false
+    },
+    "typechecks": "Not rerun for this packaging-only export.",
+    "lighthouse": "Not rerun for this packaging-only export.",
+    "liveModelInference": "not run",
+    "destinationDeployment": "not run"
+  },
+  "limitations": [
+    "Installers target only the exact upstream base commit; another revision requires a reviewed port.",
+    "This snapshot captures protocol-v3 source at the sourceHead recorded in manifest.json. Package verification does not constitute testing every target server.",
+    "Document generation uses a basic layout; source-only packaging requires npm ci and a full source/image rebuild.",
+    "Images and scanned PDF pages need a vision-capable model and sufficient context/output budget.",
+    "No destination server or Docker image was deployed by this export; no real model inference was used for validation."
+  ]
+}

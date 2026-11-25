@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ZodError } from 'zod';
+import type { LocalFilesConfig, LOCAL_FILES_VERSION } from './filesystem';
 import type { TEndpointsConfig, TModelsConfig, TConfig } from './types';
-import type { LocalFilesConfig } from './filesystem';
 import {
   MAX_SUBAGENTS,
   MAX_SUBAGENTS_CEILING,
@@ -4144,7 +4144,7 @@ export function supportsConversationTitleOwnership(config?: {
 }
 
 export type TStartupConfig = {
-  localFiles?: LocalFilesConfig & { version: 1; available: boolean };
+  localFiles?: LocalFilesConfig & { version: typeof LOCAL_FILES_VERSION; available: boolean };
   conversationTitleOwnershipVersion?: typeof CONVERSATION_TITLE_OWNERSHIP_VERSION;
   appTitle: string;
   socialLogins?: string[];

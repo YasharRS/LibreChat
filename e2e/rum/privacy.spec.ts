@@ -105,6 +105,13 @@ for (const mode of ['proxy', 'direct'] as const) {
       const { traces } = await fixture(page, secret, base);
       const scenarios = [
         {
+          path: '/api/local-files/sessions/session-123/render',
+          method: 'POST',
+          requestBody: JSON.stringify({ operation: 'write', path: 'report.pdf', content: secret }),
+          responseBody: JSON.stringify({ ok: true, value: { binary: { data: secret } } }),
+          credential: true,
+        },
+        {
           path: '/api/local-files/sessions',
           method: 'POST',
           requestBody: JSON.stringify({ root: { name: secret } }),

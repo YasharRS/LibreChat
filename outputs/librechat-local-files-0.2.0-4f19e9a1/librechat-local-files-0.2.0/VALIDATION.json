@@ -1,0 +1,64 @@
+{
+  "packageChecks": {
+    "shellSyntax": "passed",
+    "bashDryRun": "passed",
+    "powershellDryRun": "passed",
+    "bashInstallExactTree": "passed",
+    "powershellInstallExactTree": "passed",
+    "repeatInstallRefused": "passed",
+    "reversePatchRestoresBaseTree": "passed",
+    "realWorkingTreeAndIndexPreserved": "passed"
+  },
+  "featureChecksPreviouslyRunOnSource": {
+    "productionBuild": "passed: npm run lighthouse rebuilt all workspaces and the production frontend",
+    "typecheckWorkspaces": [
+      "packages/data-provider",
+      "packages/api",
+      "packages/chat",
+      "client"
+    ],
+    "focusedJest": {
+      "dataProvider": 20,
+      "apiFilesystem": 28,
+      "clientFilesystemAndRum": 154,
+      "total": 202
+    },
+    "realChatBrowserWorkflow": {
+      "passed": 4,
+      "boundary": "real browser OPFS handles; real Express/auth/session/SSE/SDK approval and provider projection; deterministic model",
+      "coverage": [
+        "text read and reviewed disk write",
+        "PDF text extraction",
+        "DOCX extraction",
+        "4 MiB PNG upload, compression and model-visible image blocks"
+      ]
+    },
+    "actualRumSdkBrowserPrivacy": {
+      "passed": 14,
+      "coverage": "proxy/direct export, base paths, raw document bodies, image-preview resource errors, real DOM/replay and account isolation"
+    },
+    "scopedStaticChecks": "passed: ESLint, formatting, imports, casing, circular dependencies, design-rule suppressions and unused English translation keys",
+    "lighthouse": {
+      "passed": true,
+      "browser": "Playwright Chromium 151",
+      "runs": 3,
+      "mongoQueryDelayMs": 250,
+      "medianLcpMs": 2357.333,
+      "lcpBudgetMs": 4500,
+      "medianCls": 0.013320568105536586,
+      "clsBudget": 0.1,
+      "referenceTbtMs": 69.94213181818175,
+      "tbtBudgetMs": 500
+    },
+    "localActivation": "enabled in the existing local LibreChat configuration; restarted production process; /readyz returned HTTP 200",
+    "liveModelInference": "not used; browser integration tests used the deterministic SDK model fixture"
+  },
+  "limitations": [
+    "Only the exact base commit is supported; another LibreChat revision needs a reviewed port.",
+    "Office extraction returns text/values, not layout or embedded chart interpretation. Direct binary editing is not included.",
+    "Images and scanned PDF pages require a vision-capable model and sufficient agent context/tool-output budget.",
+    "Legacy DOC/PPT and encrypted documents require conversion or an unlocked copy.",
+    "No destination server was accessed or deployed, no Docker image was built, and no live model inference was used.",
+    "The earlier full gate identified an unchanged Windows CRLF failure in config/delete-user.recovery.spec.js; depcheck is not installed."
+  ]
+}

@@ -4,3 +4,6 @@ packages/api/openapi/agents.openapi.json
 
 # Commit-pinned upstream source and its generated JavaScript.
 vendor/code/
+
+# Generated release bundles contain checksum-verified files.
+/outputs/

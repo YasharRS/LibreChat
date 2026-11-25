@@ -2,7 +2,10 @@ import {
   LocalFilesTransportError,
   LOCAL_FILES_VERSION,
   localFilesFormat,
+  localFilesDocument,
   localFilesInputSchema,
+  localFilesResultSchema,
+  localFilesWriteSize,
   serializeLocalFiles,
 } from 'librechat-data-provider';
 import type {
@@ -11,6 +14,7 @@ import type {
   LocalFilesInput,
   LocalFilesResult,
   LocalFilesReview,
+  LocalFilesWrite,
 } from 'librechat-data-provider';
 
 export interface Writable {
@@ -50,7 +54,13 @@ export interface Preview {
   review: LocalFilesReview;
   before: string;
   after: string;
+  binary?: {
+    file: Blob;
+    hash: string;
+    before?: { size: number; hash: string };
+  };
 }
+export type Renderer = (input: LocalFilesWrite, signal: AbortSignal) => Promise<LocalFilesResult>;
 type Code = Extract<LocalFilesResult, { ok: false }>['error']['code'];
 export class FilesystemError extends Error {
   constructor(public readonly code: Code) {
@@ -215,7 +225,17 @@ export class Filesystem {
     }
   }
 
-  async preview(input: LocalFilesInput, sessionId: string): Promise<Preview> {
+  private limit(input: LocalFilesInput): number {
+    if (input.operation === 'move') return this.config.maxMoveBytes;
+    if (
+      input.operation === 'write' &&
+      (input.encoding === 'base64' || localFilesDocument(input.path))
+    )
+      return this.config.maxFileBytes;
+    return this.config.maxTextBytes;
+  }
+
+  async preview(input: LocalFilesInput, sessionId: string, render?: Renderer): Promise<Preview> {
     const parsed = localFilesInputSchema.safeParse(input);
     if (!parsed.success) return fail('INVALID_REQUEST');
     input = parsed.data;
@@ -224,6 +244,7 @@ export class Filesystem {
     const before: LocalFilesReview['before'] = [];
     let old = '';
     let after = '';
+    let generated: Preview['binary'];
     if (input.operation === 'mkdir') {
       if (await this.exists(input.path)) return fail('CONFLICT');
       before.push({ path: input.path, hash: null });
@@ -232,6 +253,43 @@ export class Filesystem {
       const hash = await this.hash(input.path, this.config.maxMoveBytes);
       if (hash == null) return fail('NOT_FOUND');
       before.push({ path: input.path, hash }, { path: input.destination, hash: null });
+    } else if (
+      input.operation === 'write' &&
+      (input.encoding === 'base64' || localFilesDocument(input.path))
+    ) {
+      const size = localFilesWriteSize(input);
+      if (size == null) return fail('INVALID_REQUEST');
+      const maximum =
+        input.encoding === 'base64' ? this.config.maxFileBytes : this.config.maxTextBytes;
+      if (size > maximum) return fail('TOO_LARGE');
+      const hash = await this.hash(input.path, this.config.maxFileBytes);
+      let data = input.content;
+      let mime: string = localFilesFormat(input.path)?.[1] ?? 'application/octet-stream';
+      if (input.encoding !== 'base64') {
+        if (!render) return fail('UNAVAILABLE');
+        const result = localFilesResultSchema.safeParse(
+          await render(input, this.controller.signal),
+        );
+        if (!result.success) return fail('FAILED');
+        if (!result.data.ok) return fail(result.data.error.code);
+        if (result.data.value.path !== input.path || !result.data.value.binary)
+          return fail('FAILED');
+        data = result.data.value.binary.data;
+        mime = result.data.value.binary.mime;
+        after = input.content;
+      }
+      const length = localFilesWriteSize({ ...input, encoding: 'base64', content: data });
+      if (length == null) return fail('INVALID_REQUEST');
+      if (length > this.config.maxFileBytes) return fail('TOO_LARGE');
+      const bytes = Uint8Array.from(atob(data), (character) => character.charCodeAt(0));
+      generated = {
+        file: new Blob([bytes], { type: mime }),
+        hash: await digest(bytes.buffer),
+        ...(hash == null
+          ? {}
+          : { before: { hash, size: (await (await this.open(input.path)).getFile()).size } }),
+      };
+      before.push({ path: input.path, hash });
     } else {
       if (localFilesFormat(input.path) || /\.(doc|ppt)$/i.test(input.path))
         return fail('UNSUPPORTED_TEXT');
@@ -245,13 +303,14 @@ export class Filesystem {
         return fail('TOO_LARGE');
       before.push({ path: input.path, hash });
     }
+    this.check();
     const review: LocalFilesReview = {
       id: crypto.randomUUID(),
       sessionId,
       before,
       digest: await digest(new TextEncoder().encode(serializeLocalFiles(input)).buffer),
     };
-    return { input, review, before: old, after };
+    return { input, review, before: old, after, ...(generated ? { binary: generated } : {}) };
   }
 
   approve(preview: Preview, callId: string): LocalFilesReview {
@@ -265,7 +324,7 @@ export class Filesystem {
     this.grants.delete(id);
   }
 
-  execute(command: LocalFilesCommand): Promise<LocalFilesResult> {
+  execute(command: LocalFilesCommand, render?: Renderer): Promise<LocalFilesResult> {
     for (const [id, expiresAt] of this.cancelled)
       if (expiresAt <= Date.now()) this.cancelled.delete(id);
     if (this.cancelled.has(command.id))
@@ -274,7 +333,7 @@ export class Filesystem {
     if (existing) return existing;
     const controller = new AbortController();
     this.controllers.set(command.id, controller);
-    const operation = this.perform(command, controller.signal).catch(
+    const operation = this.perform(command, controller.signal, render).catch(
       (error: unknown): LocalFilesResult => ({
         ok: false,
         error: { code: filesystemError(error) },
@@ -291,6 +350,7 @@ export class Filesystem {
   private async perform(
     command: LocalFilesCommand,
     signal: AbortSignal,
+    render?: Renderer,
   ): Promise<LocalFilesResult> {
     this.check(command.expiresAt, signal);
     const parsed = localFilesInputSchema.safeParse(command.input);
@@ -340,6 +400,18 @@ export class Filesystem {
     const previous = await this.journal.get(command.id);
     if (previous?.state === 'done' && previous.result) return previous.result;
     if (previous) return fail('EXECUTION_UNCERTAIN');
+    if (!this.config.requireReview && !command.review) {
+      if (!this.canWrite) return fail('PERMISSION_DENIED');
+      const preview = await this.preview(
+        input,
+        command.sessionId,
+        render
+          ? (input, cancelled) => render(input, AbortSignal.any([cancelled, signal]))
+          : undefined,
+      );
+      this.check(command.expiresAt, signal);
+      command = { ...command, review: this.approve(preview, command.toolCallId) };
+    }
     const review = command.review;
     const grant = review && this.grants.get(review.id);
     if (
@@ -365,18 +437,14 @@ export class Filesystem {
       for (const expected of review.before) {
         let current: string | null;
         if (expected.hash == null) current = (await this.exists(expected.path)) ? 'exists' : null;
-        else
-          current = await this.hash(
-            expected.path,
-            input.operation === 'move' ? this.config.maxMoveBytes : this.config.maxTextBytes,
-          );
+        else current = await this.hash(expected.path, this.limit(input));
         if (current !== expected.hash) return fail('CONFLICT');
       }
       this.check(command.expiresAt, signal);
       await this.journal.put(command.id, { state: 'started' });
       const result = await this.commit(
         input,
-        grant.preview.after,
+        grant.preview.binary?.file ?? grant.preview.after,
         command.expiresAt,
         signal,
         review.before,
@@ -394,7 +462,7 @@ export class Filesystem {
 
   private async commit(
     input: LocalFilesInput,
-    content: string,
+    content: string | Blob,
     expiresAt: number,
     signal: AbortSignal,
     before: LocalFilesReview['before'],
@@ -457,7 +525,7 @@ export class Filesystem {
       if (expected == null && (await handle.getFile()).size !== 0) return fail('CONFLICT');
       if (
         expected != null &&
-        (await fingerprint(await handle.getFile(), this.config.maxTextBytes)) !== expected
+        (await fingerprint(await handle.getFile(), this.limit(input))) !== expected
       )
         return fail('CONFLICT');
       if (!(await handle.isSameEntry(await source.folder.getFileHandle(source.name))))

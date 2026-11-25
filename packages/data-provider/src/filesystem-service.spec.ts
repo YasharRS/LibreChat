@@ -1,18 +1,38 @@
 import axios, { AxiosError } from 'axios';
 import type { LocalFilesSession } from './filesystem';
-import { completeLocalFiles, LocalFilesTransportError } from './filesystem-service';
+import {
+  completeLocalFiles,
+  renderLocalFile,
+  LocalFilesTransportError,
+} from './filesystem-service';
 import { localFilesConfigSchema } from './filesystem';
 
 const adapter = axios.defaults.adapter;
 const session: LocalFilesSession = {
   id: 'session',
   token: 'private-session-token',
-  version: 2,
+  version: 3,
   root: { id: 'root', name: 'workspace', access: 'read' },
   config: localFilesConfigSchema.parse({}),
 };
 afterEach(() => {
   axios.defaults.adapter = adapter;
+});
+it('requests document generation with a private session header and a cancellation signal', async () => {
+  const input = { operation: 'write' as const, path: 'report.pdf', content: 'PDF content' };
+  const signal = new AbortController().signal;
+  const result = {
+    ok: true,
+    value: { path: input.path, binary: { mime: 'application/pdf', data: 'JVBERg==' } },
+  };
+  axios.defaults.adapter = async (config) => {
+    expect(config.url).toMatch(/\/sessions\/session\/render$/);
+    expect(config.headers['X-Local-Files-Token']).toBe(session.token);
+    expect(config.signal).toBe(signal);
+    expect(JSON.parse(config.data)).toEqual(input);
+    return { data: result, status: 200, statusText: 'OK', headers: {}, config };
+  };
+  expect(await renderLocalFile(session, input, signal)).toEqual(result);
 });
 it('discards transport diagnostics, request credentials and file text before React Query sees a failure', async () => {
   axios.defaults.adapter = async (config) => {

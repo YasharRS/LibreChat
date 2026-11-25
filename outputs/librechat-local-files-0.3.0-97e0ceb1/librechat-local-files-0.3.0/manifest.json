@@ -1,0 +1,700 @@
+{
+  "name": "LibreChat browser local folders",
+  "featureVersion": "0.3.0",
+  "format": "git-source-patch",
+  "createdAt": "2026-11-25T16:49:50.581249+00:00",
+  "upstream": "https://github.com/LibreChat-AI/LibreChat",
+  "baseVersion": "v0.8.9",
+  "baseBranch": "dev",
+  "baseCommit": "04fbc0256084f5d3bfa5f1b5f7e2474b01abc93f",
+  "featureTree": "ab3830351b6abc1f5584b25d7898b1abee5d8e9a",
+  "sourceHead": "40606661aea380aee112705c028ef23a21215764",
+  "includesWorkingTreeChanges": false,
+  "patchSha256": "f27d22dfc6ec9966e7a49469f81fd61a3cf0143e963eac78a220a25a47619fa1",
+  "files": [
+    {
+      "path": ".gitignore",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "90353158d612ad3294ff15b84ee159e6b87c2032",
+      "afterGitBlob": "6c8cdb62e5a6e50512d1097afff872c512f8da9a",
+      "sha256": "85adfaf049c39ea419438d057a0f3ff80db6f330b76063ced55ffd7c5326f3d4"
+    },
+    {
+      "path": "api/server/controllers/agents/client.js",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "38adaf725fb56e1e40c1dc368986063c95007a94",
+      "afterGitBlob": "6ddbaf790a9287c15f240704a51f49e2f6247684",
+      "sha256": "d653317ad62b8b1fc188f452591e52f75a8182c01f536d2eb8577ebf8dd55380"
+    },
+    {
+      "path": "api/server/index.js",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "06dd892e3c9f3bd8c5c5223d2406d6d75cb95a5d",
+      "afterGitBlob": "2f228e8004956f1b92ee7cd72d2e2215f62e66e6",
+      "sha256": "31d0b71f10df93b52b22b013fdd4565233276e76626a6c5d7fcfb671c1a00e0c"
+    },
+    {
+      "path": "api/server/routes/config.js",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "3827b06599f785be303244826c4efb092fe977a9",
+      "afterGitBlob": "159f22bb4824dfcd1f85d7bf7436cea7dd28775b",
+      "sha256": "9836bcb20f474d381e6b5b19e06d53ab6ed0cf3b885fda347bc8b6c596ab66db"
+    },
+    {
+      "path": "api/server/routes/filesystem.js",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "afa4092593bf21ef0ba978ac40d84d75a99474aa",
+      "sha256": "30ad85f0c9a2fb57604d1310454516863000d55904c879d92b317802b9b673f8"
+    },
+    {
+      "path": "api/server/routes/index.js",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "17285a81a6458e4e23d023c91f8259b8f7f21cde",
+      "afterGitBlob": "e3b328359ecb9580fae002f66f38f859c5cae0e2",
+      "sha256": "90292bb4c1434a233a745e6c9e877e929a463881c1e29e592c1308da8fb29960"
+    },
+    {
+      "path": "api/server/services/Filesystem.js",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "be5a8cd5d00beca7a0b2e1667a4953b1e62d8592",
+      "sha256": "793526f50a83af9bf9017dd549a72427c1f4f0d1448e16601faf11b594c81b76"
+    },
+    {
+      "path": "client/src/Providers/ChatTransportContext.tsx",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "acc7b59f95dfacfc3eeef0754e526d60729e18ae",
+      "afterGitBlob": "c57f3440ddae4e6381b6be3efbb4d2d1aa31ac98",
+      "sha256": "5a32e73f1961ed9890944589a69f6c9e0ba2090c522312f941f975a095b912bf"
+    },
+    {
+      "path": "client/src/components/Chat/Messages/Content/Part.tsx",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "46511e65ed4559d6cb3143c0a894d667d368accd",
+      "afterGitBlob": "2ab180d74674cccdf580eeb7a35b07f0fdd2dbca",
+      "sha256": "63762884f84caefbf59144423cab3866284bf63d3f2fe7a04796e260753b4a76"
+    },
+    {
+      "path": "client/src/components/Chat/Messages/Content/ToolApproval.tsx",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "a543d2862bf9a39c6ffbfd6c6bd49735f5aba4f6",
+      "afterGitBlob": "987b2e8d3ed71a625d36b711d7e363e0e06c3d99",
+      "sha256": "2ec9fc5b4aa1e299237c444353de364bad04499d66ae9b76004497533d339bbd"
+    },
+    {
+      "path": "client/src/components/Filesystem/Loading.tsx",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "39834e36d6ba13a150f580963935a25ea38d65d6",
+      "sha256": "a1aba13cd741342d0743bd4aab6b0e1fc1fd97ee19b84a47d4a49cc708f00122"
+    },
+    {
+      "path": "client/src/components/Filesystem/Panel.tsx",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "b13561e97f9a896f192a4946136e48e756f790b5",
+      "sha256": "6cd2ee101115de122a710930652626f6694a99e6918a924ec8dffc32cd71aca0"
+    },
+    {
+      "path": "client/src/components/Filesystem/Review.tsx",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "9160b48487b722310cd68d0c03ad5eb85807a06b",
+      "sha256": "2403bec525ee684abf505bf2c188ce847b2026ba1748989982780c197090fb4d"
+    },
+    {
+      "path": "client/src/components/Filesystem/Tree.tsx",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "91e7647bafa52dd9e36f03fe9d2c2774fb6fb694",
+      "sha256": "50ba46b323da24fb55dbb90615d5889488c273a0ff1b1a01287077e896422985"
+    },
+    {
+      "path": "client/src/components/Filesystem/__tests__/Review.test.tsx",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "f39ee27682ac31a5a1dd89a99eab96fc20273155",
+      "sha256": "ecc7e22a25d82fab8b74d88a5c9a920d0aba1068929e15ed575180b650dd6003"
+    },
+    {
+      "path": "client/src/components/Filesystem/__tests__/Tree.test.tsx",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "dccaca6adc5a83e1f7e64cdfe07311a29674bba0",
+      "sha256": "353b4a3bd13ff012002bb95d45496abe95e525b3220dfce295856188c8d7edaa"
+    },
+    {
+      "path": "client/src/components/Filesystem/__tests__/connection.spec.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "add92b836145a0d6e68c8e6a765c647f002051a4",
+      "sha256": "66d087a5a026e193e668e5d60b8a4049ad58353ecdead4e9684b3ea119e3a99f"
+    },
+    {
+      "path": "client/src/components/Filesystem/__tests__/engine.spec.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "6b4bbf711ed29a809ad86eec3c6bb5185a010ede",
+      "sha256": "5be9309ee84fcd061635bb9ffb058f8ce42f5f40041d7699fa69a2a1775a1604"
+    },
+    {
+      "path": "client/src/components/Filesystem/connection.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "f0276c1185ab56152dd2ed442148750ee1bb0f89",
+      "sha256": "acf9ba7713ef30062179d87aa2def8688cbf4d4db8b90af8c2ef55d5d3896867"
+    },
+    {
+      "path": "client/src/components/Filesystem/copy.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "397d933dab73a6c89df5ecca2a8792c0116644e9",
+      "sha256": "a8a3ba6e84f89bc5b2fc79e444e6630369d9731b71159d4f44a62b2533074e19"
+    },
+    {
+      "path": "client/src/components/Filesystem/engine.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "e12e00a93491b20d063491f832676369e4920707",
+      "sha256": "b05b71fe387a85a61b0e57a946e24efc29c292ce9608f675f702abeb228ef0e6"
+    },
+    {
+      "path": "client/src/components/Filesystem/storage.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "de6631e3ea6482a80bd40f3734801fd65f57b7ac",
+      "sha256": "a9e578701e9c86cd02c3fef567fb05c677a47dd48a08378798e15fd789248c2a"
+    },
+    {
+      "path": "client/src/components/Messages/Content/Error/ModelError.tsx",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "69575ade1348bb6fb2b4afdec946a0d298b25b90",
+      "afterGitBlob": "8f9780f0a0ecb77f0e74fe7a72c06d48899bdcca",
+      "sha256": "f83016981f2a3a8344fb0bba45f27a5abc7ceff839e59d40ec2b41a351f51d16"
+    },
+    {
+      "path": "client/src/components/Messages/Content/Error/registry.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "b1aff2c30b6a92809f56ecf9744401247c25ba0b",
+      "afterGitBlob": "c767c347215a6061708ff3c0c66a8fef1e6326d8",
+      "sha256": "4b2783ac849b8e232463dcd08ed78abe8cf457bba9834019f27af3212b435475"
+    },
+    {
+      "path": "client/src/hooks/AuthContext.tsx",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "970fbc30e6f0dff44944d4dfbafa2630f4ee3944",
+      "afterGitBlob": "f953caaf735c82e645eb58386d8c4228723d757c",
+      "sha256": "d2cf0c8df43561a23ef47265427e88009a46e5b29f659fa553b16781aa4a8f3f"
+    },
+    {
+      "path": "client/src/hooks/Nav/useSideNavLinks.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "b6b32f9fc7771a5f5d06d3aad421aca34cd70af8",
+      "afterGitBlob": "8262363aa1a67ea82852d458f7b3ff3c63c41fc2",
+      "sha256": "26c8dc2a6501e8492b60824b15d659a950b12826a6c0107c2cbeef080643615e"
+    },
+    {
+      "path": "client/src/hooks/SSE/events.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "a587388bd629b05d4d070db5c2f050f06cafbc34",
+      "afterGitBlob": "4e78aade248f3626667388f7390906b7bfe5a617",
+      "sha256": "aba5e12d6f211ae6cbd3a03355a2ec487441388df3319a37e22d5bc96fc83fff"
+    },
+    {
+      "path": "client/src/lib/rum/exporter.spec.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "4bafca479128c0206d386eda6b1ad9db0027782e",
+      "afterGitBlob": "867df833b2ac9e66af02668d1680ca207d0969f4",
+      "sha256": "9f13c8e7d05ce4e5131e5a69fed61588ae8d3a30dd8dfb62c5dee6ee5f7b6919"
+    },
+    {
+      "path": "client/src/lib/rum/privacy.spec.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "b6799c20ec5460d6de21f3b99d719f743ae6cd8a",
+      "afterGitBlob": "6d32247276368a38680cc32a4fe88e183d4a5da2",
+      "sha256": "35bf457a387a959dfffe2a1453e35e2c13d45cbd8283f93dde58f2b5bb5364d2"
+    },
+    {
+      "path": "client/src/lib/rum/privacy.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "1ffc58d036bb16980df41db964bf0fca73cab77d",
+      "afterGitBlob": "11dc9211e40117f291d2c5009c23bcce3b89d5b7",
+      "sha256": "48cbe7aef47d6b73abe4a4ccb5f5b76ba2c521a15164fd545b6dc85e998e241a"
+    },
+    {
+      "path": "client/src/locales/en/translation.json",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "d09e199cdfe5e8c6cf6228d161dc4b2f0288af40",
+      "afterGitBlob": "f93143646d353a36409f22807f439e3c93af8b2b",
+      "sha256": "ab90a57573a3689a3794aea876b1bc1fcd3debec1c01794072ab5c3373c99f24"
+    },
+    {
+      "path": "client/test/filesystem.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "a08848e7de3cc09dae633b8e728c2e34b8b3f7b4",
+      "sha256": "d8d91e868e67b67bfde31c12d6f4f08ffddac52c5adab78867dd641a7231e5b6"
+    },
+    {
+      "path": "docs/local-files.md",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "46a527e5c84685bb8620924c33db337cb62f6350",
+      "sha256": "01d9aaa61a5dc3693790dea3ec1ae29932a285bc720ffed153154fcd64a710c8"
+    },
+    {
+      "path": "e2e/filesystem/chat.spec.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "9646826fc820d447177f305baafbb9fa06092239",
+      "sha256": "0857e445eb14d9b8f66ef2081051a6205aa30cd6bfd31f40db50722c9cd45199"
+    },
+    {
+      "path": "e2e/filesystem/direct.spec.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "359fe3f3c992a405307ff6a74012cefc35b595be",
+      "sha256": "a14f438d2df00ff16faa8cec0500a19e22a4a9bb7c3b0797d33fa832a7522b6d"
+    },
+    {
+      "path": "e2e/filesystem/direct.yaml",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "0d55d61d574e378ec877b1ab4be564ba2525eb39",
+      "sha256": "932fe5c5c2c921587318fce58b808bb57e79ccbce4a3f3c93d87cb69f27d4bca"
+    },
+    {
+      "path": "e2e/filesystem/librechat.yaml",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "ba2e4b7603da3e4708cb2996912030913fb5b16a",
+      "sha256": "de2c4b6734e84ae466132c5e0c0360c96145dcb7909d62aa6528ee68ef2e0e61"
+    },
+    {
+      "path": "e2e/playwright.config.filesystem.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "d6a69eecac728c5e8cde49543068726373a91552",
+      "sha256": "bf68360670b33e3065dee96e35603201163f6bbf6bf40278d3a3a7adb120fcdd"
+    },
+    {
+      "path": "e2e/playwright.config.rum.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "9802e6e8ceeca7521001810ee09847b87c2136ae",
+      "afterGitBlob": "7d5715b003b69fc119530e603b855dfad14f176e",
+      "sha256": "13868ff5aea9ce71fc96bfd78af13d14c4f8a08d0a40f51342f3ab5972f6b976"
+    },
+    {
+      "path": "e2e/rum/local-files.spec.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "deea4aaad21868ec16ff49af63d54b505b0fbc85",
+      "sha256": "307f8440349a76b57ca346213d58171aa60093e5665f0d545fe558720fc6c58e"
+    },
+    {
+      "path": "e2e/rum/privacy.spec.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "42f5202d7c925eb42b55624c7ebdf2f59bb431db",
+      "afterGitBlob": "06ae48a7e8d621258c9a29464a9f8c6605decc21",
+      "sha256": "f0262171072ea1b6fc143d30100f0ab78c1f13425be9ce3d0e7e7b4f9db75704"
+    },
+    {
+      "path": "e2e/setup/local-files-model.cjs",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "7580e276e032d24fc294d0336bcd743a94943c2a",
+      "sha256": "5aff3466ac4d08be947f455842d044eb3ef300d4bfabd0bb1e324e0cb99dedf7"
+    },
+    {
+      "path": "e2e/setup/local-files.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "88f65b86a97cdef1c248deec60ba5c103a71759c",
+      "sha256": "0df962d96ddb0426ad37e36d08ca2436db1160815f2de9f3e09a909d24302dca"
+    },
+    {
+      "path": "package-lock.json",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "caa5df87ad26ee809e448ed10120aaee271968a7",
+      "afterGitBlob": "85b5c8fb33cec6b55ef6b0a2fff9846b6c1aa3cc",
+      "sha256": "a74f3715526f589a26b2c2c8d06d5e81df3848bd9a488df6b17e4b90e477749e"
+    },
+    {
+      "path": "packages/api/package.json",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "8d8d60f36cedeb133fd794b91e3554b02708348c",
+      "afterGitBlob": "588afbb7ec9065b2fbaa718c4fa789f6d0b96f36",
+      "sha256": "10d5acc541df7c49047c7cbd89983da58b30226952d4449ed31e752c9633032f"
+    },
+    {
+      "path": "packages/api/src/agents/errors.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "e13d44c10bef21ef43f4eaedf3f4cbe5f1ff0a65",
+      "afterGitBlob": "0d08f0056d08026ba89b56bfeca54d3aebfb21f3",
+      "sha256": "59615a799571ac1eead0314960b1c4a52fbedd6966422e7b3f64c1d827edba81"
+    },
+    {
+      "path": "packages/api/src/agents/hitl/policy.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "29bf2f48945f366166e7fcc4628e758e75d6289b",
+      "afterGitBlob": "d752e23dde7cfb71dcf0c37d8d4ff3b429dede60",
+      "sha256": "33dbb184274aa2601ddc07ac106c433fe14f49789f5cbde0517a732b64c2dbdd"
+    },
+    {
+      "path": "packages/api/src/agents/run.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "6afc940f5e3f355452f7f7f968187975bf7f0b7a",
+      "afterGitBlob": "18d2385f2f4ee88b2490cde0b0e7b85236219c4e",
+      "sha256": "45730b3e520da73f3081b410a40db3737d3d6d4fef6b1574daae16d85bc116dd"
+    },
+    {
+      "path": "packages/api/src/filesystem/errors.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "fc896ad212c589f56abea757a71c5c41c7c92073",
+      "sha256": "aec1e0acc03afe8bf38b589f2e47cd456ff9c3c8e6cc2ddca35c31de4387160e"
+    },
+    {
+      "path": "packages/api/src/filesystem/generate.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "f76cb76e987363d54a500d87dbf9e31f74504f06",
+      "sha256": "a889b9e738118fd12b1b0c3f006a3efd6335326396f977662fa949f2a3d87d75"
+    },
+    {
+      "path": "packages/api/src/filesystem/index.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "1f256c215589c8b6e10706d3cebba771db46e30c",
+      "sha256": "20caf8d2a6d208847c0496f51773754730bbc150131fb1c01fc3410bd30c22a1"
+    },
+    {
+      "path": "packages/api/src/filesystem/parse.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "2f69ab4093322b03c234eaa8a3fdc81e182f951b",
+      "sha256": "24ef49882804b3ef978d3f558c0ccce754a3c61dc07b1fb2e600c41a8dd23fac"
+    },
+    {
+      "path": "packages/api/src/filesystem/process.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "9f6f308f5033072be6d74b171ce6859a2dee2deb",
+      "sha256": "86e9dbf7d1ac87d1fc3a18977eaf00c7750aee4f177e091a261e8ed5d7adf30d"
+    },
+    {
+      "path": "packages/api/src/filesystem/reader-worker.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "79bbdaefc47e978df879fd5499f43d267514284f",
+      "sha256": "563d0a982418cb0335d044baae864c4ce6fa946cb4fe53c9b8586c381153235e"
+    },
+    {
+      "path": "packages/api/src/filesystem/reader.spec.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "8daae68c108f6639aa76d2a9928add66bf3db91f",
+      "sha256": "9690c97378ee1385fd79d294d0d7b6beb34b0b4be4c6e453645abf36afc0e310"
+    },
+    {
+      "path": "packages/api/src/filesystem/reader.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "8f3d40d95ac2f4b91f316f91b258ed2e84dc6e72",
+      "sha256": "6679a5845a16ab2416d00afb90aca573bd2f8398d983a3336c90885789108567"
+    },
+    {
+      "path": "packages/api/src/filesystem/runtime.spec.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "f01c0e37976b330b9f99becc9deaebb15c41da22",
+      "sha256": "57c89c9c94442e2255aee8f2aee9f0a12f1f230c8ba9a3c094adf661e8b3f835"
+    },
+    {
+      "path": "packages/api/src/filesystem/runtime.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "0f5744a31210ff0622d205ac98d6faa0389de871",
+      "sha256": "ec3936bf4df9b5ef9c0cce2b7b868812d61b3a1a33475493e27219ec896e1937"
+    },
+    {
+      "path": "packages/api/src/filesystem/samples.helper.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "e395cbcac6d9cde4fbe5b38cf22065c0b5b09d36",
+      "sha256": "db417adabe197cc1f0f1abc729552369258c812331d6b85d501ed73ceb95ce75"
+    },
+    {
+      "path": "packages/api/src/filesystem/service.spec.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "fade09a4aff8ae2ed0bfe9b75412ba27fd384c8d",
+      "sha256": "55f8f86278ed56fc882759b54994d6acc8c7006e0fcc30abf6b33cbf8cd6cccb"
+    },
+    {
+      "path": "packages/api/src/filesystem/service.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "49a6790d569323a9e9156dff707920221a0df9d9",
+      "sha256": "ea4e095c9e418496c4cbf83122d8db7e720b03536d8733d3e3fe6ff25c493d8f"
+    },
+    {
+      "path": "packages/api/src/filesystem/writer-worker.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "08c1cb5fe38fc7c80eba61ef63bc0e2da1d9fa96",
+      "sha256": "6aafe842ad41141ac8245b1cc37a6d7e90f67a38b907f5124afd502c142434de"
+    },
+    {
+      "path": "packages/api/src/filesystem/writer.spec.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "535b9903a984bdb6c69dc139a90d2a2b6853b7c0",
+      "sha256": "e72ae3c169dae1116fad2e8aeaebe270b6c0a63573b1a5d0161d80b10e35c6a0"
+    },
+    {
+      "path": "packages/api/src/filesystem/writer.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "f950ce98b3f11be5974f6d5324d766e1041c91aa",
+      "sha256": "7c9d81cf00792b344789f7a29c532c489bd0ced0fe28139617e0374c957ae6ba"
+    },
+    {
+      "path": "packages/api/src/flow/manager.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "c11557b8264e70e8a44940dc39ae11f2829d3ca1",
+      "afterGitBlob": "6241a4404b1c404443c7d1987a2a257afc5e4824",
+      "sha256": "dd25c4aa7dec522fec85f0b1b9ef6a3cf82021b209cd188828908eeaab7456a8"
+    },
+    {
+      "path": "packages/api/src/index.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "8eef3101d0007d25ddeacf296b2a2576118bb0e1",
+      "afterGitBlob": "5dfb47b110b828f06f3d0c69c53e95690618dc7e",
+      "sha256": "342db9c147f348db9944ba467452048f2defcdf1975f2a1c2ad94fb39cf28228"
+    },
+    {
+      "path": "packages/api/src/types/http.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "b6495b52ea014c687a30f4d9924738727e81eb2a",
+      "afterGitBlob": "208966c0e8d24bbff0ccf005f495718d0502fca0",
+      "sha256": "a5a8ced04115807cba5703e3afdfb1ba4e867ffd721256a84b69367fe18d6742"
+    },
+    {
+      "path": "packages/api/tsdown.config.mjs",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "c698c277d9b0fa581b817269e92a8c1289206673",
+      "afterGitBlob": "12ba3f02237c4cb891a216522703fc8ff91ce33a",
+      "sha256": "aec7b9091ee88f3e6f1fa25b3d68f8dec5cc2dcb1c8e89586ace0191a6143b95"
+    },
+    {
+      "path": "packages/chat/src/components/approval/Review.tsx",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "72ec7d6d6106f9c64f799576d22d86360dd2f808",
+      "afterGitBlob": "55243973b63894bfd71d3014c08a9c5ee9698500",
+      "sha256": "ff8754f39b64e30761a671219d10a8f352dac55776c38babaef7119b29c86e5e"
+    },
+    {
+      "path": "packages/chat/src/core/__tests__/frames.spec.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "867a34b504ba26a1968cc63d3e05541462c5a1ad",
+      "afterGitBlob": "f439bbb6e244a3081f2fbe9b1d97b4506078c964",
+      "sha256": "d6ad9c23c6f86ddfa1f70eae69c76c3166803bf026349af19dae78eeda96cc17"
+    },
+    {
+      "path": "packages/chat/src/core/resumable/frames.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "084f0b1ddbaa74318e99a19dc7f731688c7ad37e",
+      "afterGitBlob": "c848547d98e354425ccb2cb61a67ecc58b71bed0",
+      "sha256": "16b944ad85aae780536d2913bd03bcafc85b2617fc1abad29b8de336fa4602cc"
+    },
+    {
+      "path": "packages/chat/src/core/resumable/host.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "25cdd9ee1bfec46904c95537356bf48ee7cbb9c6",
+      "afterGitBlob": "35a8fe213238081877ecc5c78dea082318e29d4b",
+      "sha256": "b71a36d7632bafacd026c37e08958257ccc828bdab1f950872a71d570c839286"
+    },
+    {
+      "path": "packages/chat/src/core/resumable/sync.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "e80a735d483a09ae379a03523f6f1b06da6dad7a",
+      "afterGitBlob": "74d4c45f7276972114a7d5e74d2f17aaea0f1131",
+      "sha256": "0781bc428fcd4a8e0c7e4c9fbcfead52e3359526ab0e715a75223109625d1f9f"
+    },
+    {
+      "path": "packages/chat/src/core/transport/frames.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "37f2c51268aabc7cc8c13cd61c91dd1d9927a4e8",
+      "afterGitBlob": "b644623af173908efaabd212ecb8da8ee2355e8b",
+      "sha256": "165e268176674cc5630ce070097486a58899430d25398662ec559b1f8fc9ab71"
+    },
+    {
+      "path": "packages/data-provider/src/config.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "1f6c83211c5657ca54c38201fd4e745f8a4d3d14",
+      "afterGitBlob": "b342bb203460810a35cf18977071c92491fa0125",
+      "sha256": "340eb0119b0e72a3c43d9ec6c9fcf416165d70ac004a5bde8d6ae295fff7b5f8"
+    },
+    {
+      "path": "packages/data-provider/src/data-service.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "f673857513e690b2e58924217dd79fe31a4adfb5",
+      "afterGitBlob": "e5fe4ab8a8352d6def11e2cc8e0102384a12e27d",
+      "sha256": "fb5b45840f7c54946140753ad39bfbba9619f9fa8076d94f3b1b6d3282961190"
+    },
+    {
+      "path": "packages/data-provider/src/filesystem-service.spec.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "8af9029627f542b4a6faff92632f6bc527dee349",
+      "sha256": "4b5ee916dd5a58843ae28bacfd0963d620b2d4eceb707142226cf7ac73f5813c"
+    },
+    {
+      "path": "packages/data-provider/src/filesystem-service.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "74eb1384838780500930c42f339570938566c8d1",
+      "sha256": "2a3cea3fb740340e8c1149573c8526c20858d513bce3a31ea39869b13dd3f234"
+    },
+    {
+      "path": "packages/data-provider/src/filesystem.spec.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "a094becf4c647b83e320a44d1619a409b908502f",
+      "sha256": "344663eba46663835dc966c8d0fc69b68960d26eb5ea1fcdce1bc959093766a2"
+    },
+    {
+      "path": "packages/data-provider/src/filesystem.ts",
+      "status": "A",
+      "mode": "100644",
+      "beforeGitBlob": null,
+      "afterGitBlob": "3807073cc3748bd8369fcf7ad646e262fe04b134",
+      "sha256": "593639a3161e9b97c2f5aec88d7606c665f8d6786a8962363fb83aa5cbf5d0ea"
+    },
+    {
+      "path": "packages/data-provider/src/index.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "f9cff5676f53fe8a1e51d6bb3eaf1e208e141b16",
+      "afterGitBlob": "e5c56ec4b5f410a4429427ceefb5edc1e7ebef48",
+      "sha256": "6f06610d1f0c1bc4a0a9296f504933a4cbf54acc9961bb17bc38558b69c0701d"
+    },
+    {
+      "path": "packages/data-provider/src/keys.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "0eebb798aee1c757b19159d381a3fb8f1a80b80b",
+      "afterGitBlob": "9a49f63480bface70a7708b51fd1d01fbf379a30",
+      "sha256": "7c1a37ed1d3a2953182ecf17ce93469fe10413c940bd49f1232d7bac3b24f559"
+    },
+    {
+      "path": "packages/data-provider/src/types.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "cd6e409b0a936bc91f98d676786c3b81bd9a7c84",
+      "afterGitBlob": "028138f0ddf746d28f15933f2d286863bd456915",
+      "sha256": "8712a32f281ab2a10bf5bd88aff94e52a3fdb41314b97ef9d8da531b1a90980d"
+    },
+    {
+      "path": "packages/data-provider/src/types/agents.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "0c4b20d232a5ed942e1aec8f040e5d2e1afc7241",
+      "afterGitBlob": "0a1c108b7d6cf3dd9d75247e48a9a0a4712629db",
+      "sha256": "313b6429e7e12d020ba971d131511fabd553b45ace37f01a0cf5216be92df7e7"
+    },
+    {
+      "path": "packages/data-provider/src/types/transport.ts",
+      "status": "M",
+      "mode": "100644",
+      "beforeGitBlob": "3385520bfe04dc638f498f67b6235b1a3d7e110f",
+      "afterGitBlob": "3ac4d081a81850f4a63bbd079675c786f9a0dfbf",
+      "sha256": "d75da42c9abdf9ed1e3fd68c707546507b6bc1dab6167c8aebf6d068546f2b21"
+    }
+  ],
+  "runtimeConfigurationIncluded": false,
+  "credentialsIncluded": false,
+  "databaseIncluded": false,
+  "compiledBinariesIncluded": false
+}

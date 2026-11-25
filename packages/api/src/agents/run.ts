@@ -121,6 +121,12 @@ import {
   resolveRecursionLimit,
 } from '~/agents/config';
 import {
+  createLocalFilesTools,
+  localFilesApprovalHook,
+  localFilesDirectHook,
+  localFilesToolPolicy,
+} from '~/filesystem/runtime';
+import {
   isSteeringSupported,
   isSteerPreemptSupported,
   isSteerTerminalContinuationSupported,
@@ -146,7 +152,6 @@ import { createAgentToolApprovalSession, bindRunToolApprovalSession } from './hi
 import { resolveConfigHeaders, resolveModelHeaders, mergeHeaders } from '~/utils/headers';
 import { createSdkAgentRun, resolveSdkAgentBinding, SdkAgentRuntimeError } from './sdk';
 import { interruptToolHandler, supportsRunInterruption } from '~/agents/steering/tools';
-import { createLocalFilesTools, localFilesApprovalHook } from '~/filesystem/runtime';
 import { getLLMConfig as getAnthropicLLMConfig } from '~/endpoints/anthropic/llm';
 import { hasModelBoundContentProtection } from '../middleware/modelBoundContent';
 import { reportSubagentResolutionFailure } from '~/agents/failures/subagent';
@@ -3144,7 +3149,10 @@ export async function createRun({
   );
   const effectiveToolApprovalPolicy = () =>
     exemptAskUserQuestionFromApproval(
-      buildEffectiveToolApprovalPolicy(toolApprovalPolicy, mcpToolAliases, toolApprovalAllows),
+      localFilesToolPolicy(
+        buildEffectiveToolApprovalPolicy(toolApprovalPolicy, mcpToolAliases, toolApprovalAllows),
+        localFiles?.config,
+      ),
       ASK_USER_QUESTION_TOOL_NAME,
     );
   const nativeEditFileAgentIds = collectNativeEditFileAgentIds(agents);
@@ -3185,7 +3193,7 @@ export async function createRun({
       ...(localFiles
         ? [
             {
-              hook: localFilesApprovalHook,
+              hook: localFiles.config.requireReview ? localFilesApprovalHook : localFilesDirectHook,
               toolNames: ['local_write', 'local_edit', 'local_mkdir', 'local_move'],
             },
           ]

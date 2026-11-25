@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import axios, { isAxiosError } from 'axios';
 import type { AxiosResponse } from 'axios';
-import type { LocalFilesRoot, LocalFilesSession, LocalFilesResult } from './filesystem';
+import type {
+  LocalFilesRoot,
+  LocalFilesSession,
+  LocalFilesResult,
+  LocalFilesWrite,
+} from './filesystem';
 import { LOCAL_FILES_HEADER, LOCAL_FILES_VERSION, LOCAL_FILES_ERRORS } from './filesystem';
 import { apiBaseUrl } from './api-endpoints';
 
@@ -37,6 +42,18 @@ export async function createLocalFilesSession(
 }
 export async function heartbeatLocalFiles(session: LocalFilesSession): Promise<void> {
   await send(() => axios.post(`${url(session.id)}/heartbeat`, {}, options(session.token)));
+}
+export async function renderLocalFile(
+  session: LocalFilesSession,
+  input: LocalFilesWrite,
+  signal: AbortSignal,
+): Promise<LocalFilesResult> {
+  return send(() =>
+    axios.post<LocalFilesResult>(`${url(session.id)}/render`, input, {
+      ...options(session.token),
+      signal,
+    }),
+  );
 }
 export async function completeLocalFiles(
   session: LocalFilesSession,

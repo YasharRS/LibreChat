@@ -1,13 +1,21 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { createToolPolicyHook } from '@librechat/agents';
 import { AIMessage, HumanMessage } from '@librechat/agents/langchain/messages';
 import { localFilesConfigSchema, serializeLocalFiles } from 'librechat-data-provider';
 import { projectArtifactPayload, projectOpenAIChatToolMessageContent } from '@librechat/agents';
-import type { Agents, LocalFilesInput, LocalFilesReview } from 'librechat-data-provider';
+import type {
+  Agents,
+  LocalFilesInput,
+  LocalFilesReview,
+  TToolApprovalPolicy,
+} from 'librechat-data-provider';
 import type { LocalFilesBinding } from './service';
 import {
   createLocalFilesTools,
   markLocalFileApprovalRequests,
   localFilesApprovalHook,
+  localFilesDirectHook,
+  localFilesToolPolicy,
 } from './runtime';
 
 it('never offers remembered or edited decisions for local writes', () => {
@@ -33,6 +41,46 @@ it('never offers remembered or edited decisions for local writes', () => {
     allow_always: false,
     allowed_decisions: ['approve', 'reject'],
   });
+});
+it('allows direct local writes under the default policy without overriding explicit ask/deny rules', async () => {
+  const config = localFilesConfigSchema.parse({ requireReview: false });
+  const input = {
+    hook_event_name: 'PreToolUse' as const,
+    runId: 'run',
+    toolUseId: 'call',
+    toolName: 'local_write',
+    toolInput: { path: 'report.pdf', content: 'Text' },
+  };
+  const policies: Array<[TToolApprovalPolicy, string]> = [
+    [{ enabled: true }, 'allow'],
+    [{ enabled: true, deny: ['local_*'] }, 'deny'],
+    [{ enabled: true, ask: ['local_write'] }, 'ask'],
+  ];
+  for (const [policy, expected] of policies) {
+    const hook = createToolPolicyHook(localFilesToolPolicy({ ...policy }, config)!);
+    expect(await hook(input, new AbortController().signal)).toMatchObject({ decision: expected });
+  }
+  expect(await localFilesDirectHook(input, new AbortController().signal)).toEqual({
+    decision: 'allow',
+  });
+});
+it('dispatches direct writes without a review receipt and still validates binary encoding', async () => {
+  const session = binding();
+  session.config.requireReview = false;
+  const write = createLocalFilesTools(session, 'chat', new AbortController().signal, true).find(
+    (tool) => tool.name === 'local_write',
+  )!;
+  const call = {
+    type: 'tool_call' as const,
+    id: 'call',
+    name: 'local_write',
+    args: { path: 'report.pdf', content: 'AAGA/w==', encoding: 'base64' },
+  };
+  await write.invoke(call);
+  expect(session.invoke).toHaveBeenCalledTimes(1);
+  const result = await write.invoke({ ...call, args: { ...call.args, content: 'not base64!' } });
+  expect(result.content).toContain('INVALID_REQUEST');
+  expect(session.invoke).toHaveBeenCalledTimes(1);
 });
 it('installs a mandatory ask decision instead of trusting a bypass preference', async () => {
   const input = {

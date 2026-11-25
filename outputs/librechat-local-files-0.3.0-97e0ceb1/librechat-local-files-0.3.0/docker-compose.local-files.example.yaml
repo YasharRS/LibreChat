@@ -1,0 +1,8 @@
+# Append to the existing deployment's normal Compose files.
+# First build the patched source with:
+#   docker build -t librechat-local-files:0.3.0 .
+services:
+  api:
+    image: librechat-local-files:0.3.0
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml:ro

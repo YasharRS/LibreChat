@@ -223,7 +223,22 @@ export async function receiveLocalFiles(value: LocalFilesCommand): Promise<void>
     command.expiresAt <= Date.now()
   )
     return;
-  const result: LocalFilesResult = await entry.engine.execute(command);
+  const session = entry.session;
+  const result: LocalFilesResult = await entry.engine.execute(command, (input, signal) =>
+    entry.client.fetchQuery({
+      queryKey: [
+        QueryKeys.localFiles,
+        entry.owner,
+        entry.root.id,
+        session.id,
+        'render',
+        command.id,
+      ],
+      queryFn: () => dataService.renderLocalFile(session, input, signal),
+      retry: false,
+      cacheTime: 0,
+    }),
+  );
   if (![...items().values()].includes(entry)) return;
   await mutate(
     entry,

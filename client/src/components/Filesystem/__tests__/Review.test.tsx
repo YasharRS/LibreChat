@@ -1,8 +1,9 @@
 import React from 'react';
+import axios from 'axios';
 import { RecoilRoot } from 'recoil';
 import { webcrypto } from 'node:crypto';
-import { File as NativeFile } from 'node:buffer';
 import { localFilesConfigSchema } from 'librechat-data-provider';
+import { Blob as NativeBlob, File as NativeFile } from 'node:buffer';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Agents } from 'librechat-data-provider';
@@ -33,7 +34,9 @@ const approval: NonNullable<Agents.ToolCall['approval']> = {
 let entry: Connection;
 let folder: DiskFolder;
 let client: QueryClient;
+const adapter = axios.defaults.adapter;
 beforeAll(() => {
+  Object.defineProperty(globalThis, 'Blob', { configurable: true, value: NativeBlob });
   Object.defineProperty(globalThis, 'File', { configurable: true, value: NativeFile });
   Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
 });
@@ -58,15 +61,48 @@ beforeEach(async () => {
     conversationId: 'chat',
     engine,
     client,
-    session: { id: crypto.randomUUID(), token: 'memory-only-token', config, root, version: 2 },
+    session: { id: crypto.randomUUID(), token: 'memory-only-token', config, root, version: 3 },
   };
   setLocalFilesOwner(owner);
   setConnection('chat', entry);
 });
 afterEach(() => {
+  axios.defaults.adapter = adapter;
   entry.session = undefined;
   clearLocalFiles();
   client.clear();
+});
+it('generates a document before approval and offers the exact proposed bytes for inspection', async () => {
+  const bytes = Buffer.from('%PDF-1.7\nproposed-document-bytes');
+  axios.defaults.adapter = async (config) => ({
+    data: {
+      ok: true,
+      value: {
+        path: 'report.pdf',
+        binary: { mime: 'application/pdf', data: bytes.toString('base64') },
+      },
+    },
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config,
+  });
+  mount({ path: 'report.pdf', content: 'Document contents' });
+  expect(await screen.findByText('Document contents')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Download proposed file' })).toBeEnabled();
+  expect(screen.getByText(/bytes · SHA-256/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+  await waitFor(() => expect(screen.getByTestId('decision')).toHaveTextContent('"scope":"once"'));
+  expect(folder.files.has('report.pdf')).toBe(false);
+});
+it('keeps approval disabled when document generation fails and shows a safe localized error', async () => {
+  axios.defaults.adapter = async () => {
+    throw new Error('private document payload');
+  };
+  mount({ path: 'report.pdf', content: 'Sensitive content' });
+  expect(await screen.findByRole('alert')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
+  expect(screen.queryByText(/private document payload/)).not.toBeInTheDocument();
 });
 function Probe() {
   const state = useApprovalContext();

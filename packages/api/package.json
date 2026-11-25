@@ -82,6 +82,7 @@
     "@types/multer": "^1.4.13",
     "@types/node": "^24.12.4",
     "@types/node-fetch": "^2.6.13",
+    "@types/pdfkit": "^0.17.7",
     "@types/sanitize-html": "^2.16.1",
     "@types/supertest": "^7.2.0",
     "@types/yauzl": "^2.10.3",
@@ -180,17 +181,22 @@
     "zod-to-json-schema": "^3.25.1"
   },
   "dependencies": {
+    "@fontsource/noto-sans": "^5.3.0",
+    "@fontsource/noto-sans-arabic": "^5.3.0",
     "@langchain/langgraph-checkpoint": "^1.1.2",
     "@langchain/langgraph-checkpoint-mongodb": "^1.4.0",
+    "@librechat/code": "file:../../vendor/code",
     "@simplewebauthn/server": "^13.3.2",
     "cluster-key-slot": "^1.1.2",
     "croner": "^10.0.1",
+    "docx": "^9.16.0",
     "express-rate-limit": "^8.5.1",
     "helmet": "^8.3.0",
+    "pdfkit": "^0.21.0",
+    "pptxgenjs": "^4.0.1",
     "protobufjs": "^7.6.5",
     "proxy-from-env": "^2.1.0",
     "re2js": "^2.9.1",
-    "@librechat/code": "file:../../vendor/code",
     "ws": "^8.21.0"
   }
 }

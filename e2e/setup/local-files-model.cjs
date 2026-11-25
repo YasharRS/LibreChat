@@ -2,11 +2,30 @@ const { FakeChatModel } = require('@librechat/agents');
 
 module.exports = (run, context) => {
   const prompt = JSON.stringify(context.messages ?? []);
-  const write = prompt.includes('LOCAL_WRITE');
+  const generated = [
+    { marker: 'LOCAL_CREATE_PDF', path: 'created.pdf', content: 'Document generation verified' },
+    { marker: 'LOCAL_CREATE_DOCX', path: 'created.docx', content: 'Document generation verified' },
+    {
+      marker: 'LOCAL_CREATE_XLSX',
+      path: 'created.xlsx',
+      content: 'Name,Value\nDocument generation verified,42',
+    },
+    {
+      marker: 'LOCAL_CREATE_PPTX',
+      path: 'created.pptx',
+      content: 'Title\nDocument generation verified',
+    },
+    { marker: 'LOCAL_CREATE_BINARY', path: 'created.dat', content: 'AAGA/w==', encoding: 'base64' },
+  ].find((entry) => prompt.includes(entry.marker));
+  const write = !!generated || prompt.includes('LOCAL_WRITE');
   const pdf = prompt.includes('LOCAL_PDF');
   const word = prompt.includes('LOCAL_WORD');
   const image = prompt.includes('LOCAL_IMAGE');
-  const path = pdf ? 'report.pdf' : word ? 'letter.docx' : image ? 'photo.png' : 'note.txt';
+  let path = 'note.txt';
+  if (pdf) path = 'report.pdf';
+  else if (word) path = 'letter.docx';
+  else if (image) path = 'photo.png';
+  if (generated) path = generated.path;
   const name = write ? 'local_write' : 'local_read';
   const id = write ? 'local-write-call' : 'local-read-call';
   class Model extends FakeChatModel {
@@ -14,21 +33,19 @@ module.exports = (run, context) => {
       if (restored.some((message) => message.tool_call_id === id)) {
         const result = restored.find((message) => message.tool_call_id === id);
         const content = JSON.stringify(result.content);
-        const verified = pdf
-          ? content.includes('PDF extraction verified')
-          : word
-            ? content.includes('This is a sample DOCX file.')
-            : image
-              ? restored.some(
-                  (message) =>
-                    Array.isArray(message.content) &&
-                    message.content.some(
-                      (block) =>
-                        block.type === 'image_url' &&
-                        block.image_url.url.startsWith('data:image/jpeg;base64,'),
-                    ),
-                )
-              : true;
+        let verified = true;
+        if (pdf) verified = content.includes('PDF extraction verified');
+        else if (word) verified = content.includes('This is a sample DOCX file.');
+        else if (image)
+          verified = restored.some(
+            (message) =>
+              Array.isArray(message.content) &&
+              message.content.some(
+                (block) =>
+                  block.type === 'image_url' &&
+                  block.image_url.url.startsWith('data:image/jpeg;base64,'),
+              ),
+          );
         yield* new FakeChatModel({
           responses: [
             verified ? 'Local file operation complete.' : 'Extraction verification failed.',
@@ -46,7 +63,11 @@ module.exports = (run, context) => {
         type: 'tool_call',
         name,
         id,
-        args: { path, ...(write ? { content: 'reviewed by the owner' } : {}) },
+        args: {
+          path,
+          ...(write ? { content: generated?.content ?? 'reviewed by the owner' } : {}),
+          ...(generated?.encoding ? { encoding: generated.encoding } : {}),
+        },
       },
     ],
   });

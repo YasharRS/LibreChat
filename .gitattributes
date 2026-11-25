@@ -6,3 +6,6 @@
 .env.example text eol=lf
 .env.test.example text eol=lf
 /vendor/code/browser-enrollment-protocol.ts text eol=lf
+
+# Preserve generated release files and their checksums byte for byte.
+/outputs/** -text

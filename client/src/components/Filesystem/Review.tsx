@@ -3,13 +3,19 @@ import { Button } from '@librechat/client';
 import { useQuery } from '@tanstack/react-query';
 import { boundApprovalLabel } from '@librechat/chat';
 import { useComposerPresentsApproval } from '@librechat/chat/react';
-import { QueryKeys, localFilesInputSchema, localFilesOperation } from 'librechat-data-provider';
+import {
+  dataService,
+  QueryKeys,
+  localFilesInputSchema,
+  localFilesOperation,
+} from 'librechat-data-provider';
 import type { Agents } from 'librechat-data-provider';
 import {
   useApprovalContext,
   useResumeSubmit,
 } from '~/components/Chat/Messages/Content/ApprovalContext';
 import { FilesystemError, filesystemError } from './engine';
+import { triggerDownload } from '~/utils/downloadFile';
 import { ChatContext } from '~/Providers/ChatContext';
 import useLocalize from '~/hooks/useLocalize';
 import { useConnections } from './connection';
@@ -58,7 +64,7 @@ export default function Review({
       args,
     ],
     enabled: !!entry?.session,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       let parsed: unknown;
       try {
         parsed = typeof args === 'string' ? JSON.parse(args) : args;
@@ -73,8 +79,15 @@ export default function Review({
       });
       if (!input.success) throw new FilesystemError('INVALID_REQUEST');
       if (!entry?.session) throw new FilesystemError('UNAVAILABLE');
+      const session = entry.session;
       try {
-        return await entry.engine.preview(input.data, entry.session.id);
+        return await entry.engine.preview(input.data, session.id, (input, cancelled) =>
+          dataService.renderLocalFile(
+            session,
+            input,
+            signal ? AbortSignal.any([cancelled, signal]) : cancelled,
+          ),
+        );
       } catch (error) {
         throw new FilesystemError(filesystemError(error));
       }
@@ -120,19 +133,55 @@ export default function Review({
             ready.input.operation !== 'mkdir' && (
               <>
                 <h4 className="font-medium">{localize('com_fs_before')}</h4>
-                <pre
-                  dir="auto"
-                  className="max-h-60 overflow-auto text-sm break-words whitespace-pre-wrap"
-                >
-                  {ready.before}
-                </pre>
+                {ready.binary ? (
+                  <p className="text-sm break-all">
+                    {ready.binary.before
+                      ? localize('com_fs_binary_details', {
+                          size: ready.binary.before.size,
+                          hash: ready.binary.before.hash,
+                        })
+                      : localize('com_fs_new_file')}
+                  </p>
+                ) : (
+                  <pre
+                    dir="auto"
+                    className="max-h-60 overflow-auto text-sm break-words whitespace-pre-wrap"
+                  >
+                    {ready.before}
+                  </pre>
+                )}
                 <h4 className="font-medium">{localize('com_fs_after')}</h4>
-                <pre
-                  dir="auto"
-                  className="max-h-60 overflow-auto text-sm break-words whitespace-pre-wrap"
-                >
-                  {ready.after}
-                </pre>
+                {ready.after && (
+                  <pre
+                    dir="auto"
+                    className="max-h-60 overflow-auto text-sm break-words whitespace-pre-wrap"
+                  >
+                    {ready.after}
+                  </pre>
+                )}
+                {ready.binary && (
+                  <>
+                    <p className="text-sm break-all">
+                      {localize('com_fs_binary_details', {
+                        size: ready.binary.file.size,
+                        hash: ready.binary.hash,
+                      })}
+                    </p>
+                    <p className="text-text-secondary text-sm">
+                      {localize('com_fs_binary_notice')}
+                    </p>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        if (!ready.binary) return;
+                        const url = URL.createObjectURL(ready.binary.file);
+                        triggerDownload(url, ready.input.path.split('/').pop() ?? 'file');
+                      }}
+                    >
+                      {localize('com_fs_download_proposal')}
+                    </Button>
+                  </>
+                )}
               </>
             )
           )}

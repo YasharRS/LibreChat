@@ -28,6 +28,7 @@ export default function Panel() {
   const entry = candidate?.owner === owner ? candidate : undefined;
   const { data: startup } = useGetStartupConfig();
   const config = startup?.localFiles;
+  const mode = config?.requireReview ? 'com_fs_review_changes' : 'com_fs_direct_changes';
   const client = useQueryClient();
   const [selected, setSelected] = useState('');
   const [failure, setFailure] = useState<ReturnType<typeof filesystemError>>();
@@ -154,9 +155,7 @@ export default function Panel() {
               <div role="status" className="flex flex-wrap items-center gap-2">
                 <bdi>{boundApprovalLabel(entry.root.name, 255).label}</bdi>
                 <span className="text-text-secondary text-sm">
-                  {localize(
-                    entry.root.access === 'read' ? 'com_fs_read_only' : 'com_fs_review_changes',
-                  )}
+                  {localize(entry.root.access === 'read' ? 'com_fs_read_only' : mode)}
                 </span>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -167,7 +166,9 @@ export default function Panel() {
                       void enable();
                     }}
                   >
-                    {localize('com_fs_enable_write')}
+                    {localize(
+                      config.requireReview ? 'com_fs_enable_write' : 'com_fs_enable_direct',
+                    )}
                   </Button>
                 )}
                 <Button

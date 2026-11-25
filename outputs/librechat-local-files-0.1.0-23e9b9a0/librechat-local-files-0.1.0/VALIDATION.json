@@ -1,0 +1,44 @@
+{
+  "packageChecks": {
+    "shellSyntax": "passed",
+    "bashDryRun": "passed",
+    "powershellDryRun": "passed",
+    "bashInstallExactTree": "passed",
+    "powershellInstallExactTree": "passed",
+    "repeatInstallRefused": "passed",
+    "reversePatchRestoresBaseTree": "passed",
+    "realWorkingTreeAndIndexPreserved": "passed"
+  },
+  "featureChecksPreviouslyRunOnSource": {
+    "productionBuild": "passed",
+    "typecheckWorkspaces": [
+      "packages/api",
+      "packages/data-provider",
+      "packages/chat",
+      "client"
+    ],
+    "focusedJest": "passed: filesystem contracts/transport, engine/UI/connection, broker/tools, RUM privacy, flow, HITL and chat transport",
+    "legacyAgentController": "348 tests passed",
+    "realChatBrowserWorkflow": "passed in Chrome 158 with native OPFS handles and deterministic model",
+    "browserHandleAndAccountRegistry": "2 tests passed",
+    "actualRumSdkBrowserPrivacy": "12 tests passed",
+    "scopedStaticChecks": "passed",
+    "lighthouse": {
+      "browser": "Chromium 151 pinned by Playwright",
+      "runs": 3,
+      "medianLcpMs": 2490.318,
+      "lcpBudgetMs": 4500,
+      "medianCls": 0.013320568105536586,
+      "clsBudget": 0.1,
+      "referenceTbtMs": 61.14223054545465,
+      "tbtBudgetMs": 500
+    }
+  },
+  "limitations": [
+    "Only the exact base commit was built and tested; another LibreChat revision needs a reviewed port.",
+    "Existing config/delete-user.recovery.spec.js fails on the Windows checkout because its shebang stripping does not handle CRLF; this source was unchanged.",
+    "depcheck was not installed, so the unused-package gate was not run.",
+    "Installed Chrome/Edge 158 failed Lighthouse trace capture with NO_NAVSTART; the complete audit passed using the project's pinned Chromium 151.",
+    "No destination server was accessed or deployed; no live model inference was used."
+  ]
+}

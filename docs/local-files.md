@@ -9,6 +9,7 @@ Enable the feature after every serving replica has upgraded:
 ```yaml
 localFiles:
   enabled: true
+  requireReview: true
   maxTextBytes: 1048576
   maxMoveBytes: 16777216
   maxFileBytes: 15728640
@@ -30,10 +31,12 @@ endpoints:
       enabled: true
 ```
 
-Keep your existing tool policy. A built-in policy asks for every local write, edit, directory
-creation, and move. Remembered approvals never grant local disk writes. Explicit
-administrator deny rules remain authoritative, including under `mode: bypass`.
-Local folders are off by default.
+Local folders are off by default. `requireReview` defaults to `true`: every local write,
+edit, directory creation and move requires a one-time review. Set `requireReview: false`
+to execute changes directly after granting the connected folder write access. In direct
+mode, tool approval does not need to be enabled. With tool approval enabled, explicit
+administrator ask/deny rules remain authoritative; unmatched local tools run directly.
+Remembered approvals do not bypass review when `requireReview` is enabled.
 
 Build this checkout with `npm run frontend` before starting the server. For Docker,
 build a local image containing these changes; the standard prebuilt image does not
@@ -52,8 +55,8 @@ services:
 ```
 
 Use Chrome or Edge on desktop over HTTPS or localhost. Open **Local folder**, choose
-a test folder, and optionally select **Enable changes with review** before sending a
-turn. The initial connection is read only. Each chat has one active folder. The tools
+a test folder, and select **Enable changes with review** (or **Enable changes** in direct
+mode) before asking the assistant to write. The initial connection is read only. Each chat has one active folder. The tools
 belong to the main interactive chat agent; unattended and API-only runs cannot use them.
 
 Expand directories to browse their contents and select a file for a local preview.
@@ -74,8 +77,30 @@ by `maxImages`; ask for a smaller range with `local_read`'s inclusive, 1-based
 `startPage`/`endPage` arguments (also available for PPTX/ODP slides). These limits fail
 explicitly rather than silently omitting pages. Images are resized and encoded as JPEG
 before entering model history. Legacy DOC/PPT require conversion; password-protected
-documents require an unlocked copy. Direct binary editing is unavailable; save a summary
-or proposed changes to a text/Markdown file instead. Other files can be listed and moved.
+documents require an unlocked copy. Other files can be listed and moved.
+
+`local_write` creates or replaces files in any format:
+
+- PDF, DOCX and ODT are generated as real documents from UTF-8 text. PDFs use embedded
+  fonts, wrap text, and paginate automatically; a form-feed character starts a new page.
+- XLSX, XLS and ODS accept CSV, or JSON such as
+  `{"sheets":[{"name":"Data","rows":[["Name","Count"],["Example",42]]}]}`.
+  JSON cell values are literal strings, numbers, booleans or null; formulas are not executed.
+- PPTX and ODP accept slides separated by a line containing `---`, with each slide's first
+  line as its title, or `{"slides":[{"title":"Title","body":"Slide text"}]}`.
+- Any binary format, including images, archives and formats without a built-in generator,
+  accepts complete base64-encoded bytes with `encoding: "base64"`. The decoded file is
+  bounded by `maxFileBytes`; malformed base64 is rejected before writing.
+- Other extensions keep the existing UTF-8 text behavior. `local_edit` performs exact
+  text replacements; for document changes, read the document and use `local_write` to
+  generate its replacement. Regeneration uses the supplied content and a basic layout;
+  supply complete binary bytes to retain an externally generated layout or embedded media.
+
+Generation runs in a disposable server process without shell execution, external resources,
+or server-side output files. Input uses `maxTextBytes`, generated files use `maxFileBytes`,
+and PDF pages, sheets and slides use `maxPages`. Rendering shares the existing processor
+timeout and concurrency settings. A text write never stores fake text bytes under a PDF
+or Office extension. Images require actual image bytes rather than UTF-8 text.
 
 `maxOutputBytes` bounds a parsed document's complete text/base64 output below the SDK's
 tool-content ceiling. Large documents or multiple scanned pages can reach this limit
@@ -84,15 +109,17 @@ The selected agent's tool-output/context budget can lower this ceiling further; 
 compression follows that effective budget. For detailed image analysis, use a vision
 model with enough context or increase the existing agent `maxToolResultChars` setting.
 
-Before changing a file, review its current and proposed contents in the connected tab.
+When review is enabled, inspect the current and proposed contents in the connected tab.
+A generated/binary proposal includes its byte size, SHA-256 and a download for inspection.
+Approval saves those exact bytes without rendering the document again.
 A review binds the operation, paths, connection, and current file hashes. Changed files
 need a new proposal. Local writes cannot use "Always allow". Moves copy and verify one
 file before removing its source, never overwrite a destination, and are not atomic.
 A failed removal leaves both copies. Directory moves, standalone deletion, shell
 execution and unsupported browsers are outside this version.
 
-The local-folder protocol is version 2. Upgrade every replica and reload browser tabs
-when installing this version over the original text-only feature.
+The local-folder protocol is version 3. Upgrade every replica and reload browser tabs
+when installing this version over an earlier local-folder feature.
 
 Disconnecting or replacing a connected folder stops its active chat run. The browser
 remembers selected folder handles in account-scoped IndexedDB and offers the last
@@ -114,3 +141,5 @@ real Express server and resumable chat, a disposable MongoDB, and a deterministi
 model. After building, run `npx playwright test --config=e2e/playwright.config.filesystem.ts`.
 Set `E2E_CHROMIUM_CHANNEL=chrome` to use an installed Chrome. Native handle and
 telemetry tests run with `npx playwright test --config=e2e/playwright.config.rum.ts`.
+Run the direct-writing document tests with
+`npx cross-env E2E_LOCAL_FILES_DIRECT=true playwright test --config=e2e/playwright.config.filesystem.ts`.

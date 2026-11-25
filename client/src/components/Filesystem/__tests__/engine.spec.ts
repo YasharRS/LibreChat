@@ -1,5 +1,5 @@
 import { webcrypto } from 'node:crypto';
-import { File as NativeFile } from 'node:buffer';
+import { Blob as NativeBlob, File as NativeFile } from 'node:buffer';
 import { localFilesConfigSchema, localFilesCommandSchema } from 'librechat-data-provider';
 import type { LocalFilesCommand, LocalFilesInput, LocalFilesResult } from 'librechat-data-provider';
 import type { JournalEntry } from '../engine';
@@ -10,7 +10,7 @@ const sessionId = '00000000-0000-4000-8000-000000000001';
 const rootId = '00000000-0000-4000-8000-000000000002';
 function command(input: LocalFilesInput): LocalFilesCommand {
   return {
-    version: 2,
+    version: 3,
     id: crypto.randomUUID(),
     sessionId,
     rootId,
@@ -25,6 +25,7 @@ let folder: DiskFolder;
 let records: Map<string, JournalEntry>;
 let engine: Filesystem;
 beforeAll(() => {
+  Object.defineProperty(globalThis, 'Blob', { configurable: true, value: NativeBlob });
   Object.defineProperty(globalThis, 'File', { configurable: true, value: NativeFile });
   Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcrypto });
   Object.defineProperty(navigator, 'locks', {
@@ -74,15 +75,99 @@ it.each(['report.pdf', 'letter.docx', 'sheet.xlsx', 'slides.pptx', 'photo.png'])
     expect(file.writes).toBe(0);
   },
 );
-it('never writes UTF-8 data over a binary document or misreads control bytes as text', async () => {
+it('requires document generation instead of writing UTF-8 bytes with a binary extension', async () => {
   await expect(
     engine.preview({ operation: 'write', path: 'report.pdf', content: 'replacement' }, sessionId),
-  ).rejects.toMatchObject({ code: 'UNSUPPORTED_TEXT' });
+  ).rejects.toMatchObject({ code: 'UNAVAILABLE' });
   folder.files.set('unknown.dat', new DiskFile('unknown.dat', new Uint8Array([0, 1, 2])));
   expect(await engine.inspect({ operation: 'read', path: 'unknown.dat' })).toEqual({
     ok: false,
     error: { code: 'UNSUPPORTED_TEXT' },
   });
+});
+it.each([
+  'report.pdf',
+  'letter.docx',
+  'sheet.xlsx',
+  'slides.pptx',
+  'archive.zip',
+  'photo.png',
+  'unknown.dat',
+])('writes the exact reviewed binary bytes to %s', async (path) => {
+  const request = await reviewed({
+    operation: 'write',
+    path,
+    content: 'AAGA/w==',
+    encoding: 'base64',
+  });
+  expect(await engine.execute(request)).toEqual({ ok: true, value: { path } });
+  expect(new Uint8Array(await (await folder.files.get(path)!.getFile()).arrayBuffer())).toEqual(
+    new Uint8Array([0, 1, 128, 255]),
+  );
+  expect((await engine.execute(request)).ok).toBe(true);
+  expect(folder.files.get(path)?.writes).toBe(1);
+});
+it('replaces an existing binary document, but refuses a stale binary replacement', async () => {
+  folder.files.set('report.pdf', new DiskFile('report.pdf', new Uint8Array([0, 1, 128, 255])));
+  const request = await reviewed({
+    operation: 'write',
+    path: 'report.pdf',
+    content: 'AQID',
+    encoding: 'base64',
+  });
+  folder.files.get('report.pdf')!.content = new Uint8Array([99, 98]);
+  expect(await engine.execute(request)).toEqual({ ok: false, error: { code: 'CONFLICT' } });
+  expect(folder.files.get('report.pdf')?.writes).toBe(0);
+});
+it('writes without a per-file receipt only when review is disabled and folder writes are enabled', async () => {
+  const direct = new Filesystem(
+    folder,
+    { ...engine.config, requireReview: false },
+    {
+      get: async (id) => records.get(id),
+      put: async (id, value) => {
+        records.set(id, value);
+      },
+    },
+  );
+  const request = command({ operation: 'write', path: 'note.txt', content: 'direct change' });
+  expect(await direct.execute(request)).toEqual({
+    ok: false,
+    error: { code: 'PERMISSION_DENIED' },
+  });
+  await direct.enable();
+  expect(await direct.execute(request)).toEqual({ ok: true, value: { path: 'note.txt' } });
+  expect((await direct.execute(request)).ok).toBe(true);
+  expect(folder.files.get('note.txt')?.writes).toBe(1);
+  expect(folder.files.get('note.txt')?.content).toBe('direct change');
+  direct.disconnect();
+  expect(
+    await direct.execute(command({ operation: 'write', path: 'note.txt', content: 'later' })),
+  ).toEqual({ ok: false, error: { code: 'CANCELLED' } });
+});
+it('checks malformed binary data and decoded size before writing', async () => {
+  await expect(
+    engine.preview(
+      { operation: 'write', path: 'bad.pdf', content: 'secret%', encoding: 'base64' },
+      sessionId,
+    ),
+  ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+  const small = new Filesystem(
+    folder,
+    { ...engine.config, maxFileBytes: 3 },
+    {
+      get: async () => undefined,
+      put: async () => undefined,
+    },
+  );
+  await expect(
+    small.preview(
+      { operation: 'write', path: 'big.pdf', content: 'AAGA/w==', encoding: 'base64' },
+      sessionId,
+    ),
+  ).rejects.toMatchObject({ code: 'TOO_LARGE' });
+  expect(folder.files.has('bad.pdf')).toBe(false);
+  expect(folder.files.has('big.pdf')).toBe(false);
 });
 it('never changes a file without a locally approved receipt', async () => {
   await engine.enable();

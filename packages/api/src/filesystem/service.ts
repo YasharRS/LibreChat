@@ -10,6 +10,8 @@ import {
   localFilesRootSchema,
   localFilesResultSchema,
   localFilesFormat,
+  localFilesDocument,
+  localFilesInputSchema,
 } from 'librechat-data-provider';
 import type {
   Agents,
@@ -24,6 +26,7 @@ import type { AppConfig } from '@librechat/data-schemas';
 import type { Request, Response } from 'express';
 import type { Keyv } from 'keyv';
 import type { LocalFilesReader } from './reader';
+import type { LocalFilesWriter } from './writer';
 import type { FlowLease } from '~/flow/manager';
 import type { ServerRequest } from '~/types';
 import { FlowStateManager, FLOW_MONITOR_SETTLED } from '~/flow/manager';
@@ -65,7 +68,8 @@ export const localFilesFailure = (
 export function localFilesAvailable(config: AppConfig | undefined): boolean {
   return (
     config?.config?.localFiles?.enabled === true &&
-    config.endpoints?.agents?.toolApproval?.enabled === true
+    (config.config.localFiles.requireReview === false ||
+      config.endpoints?.agents?.toolApproval?.enabled === true)
   );
 }
 
@@ -86,9 +90,11 @@ export function localFilesCapabilities(config: AppConfig | undefined): {
 export function createLocalFilesService({
   store,
   read,
+  write,
 }: {
   store: Keyv;
   read?: LocalFilesReader;
+  write?: LocalFilesWriter;
 }): LocalFilesService {
   // The protocol bounds a request to five minutes. Effective deployments may set a shorter deadline.
   const flows = new FlowStateManager<LocalFilesResult>(store, { ttl: 300000 });
@@ -253,6 +259,56 @@ export function createLocalFilesService({
           res.status(404).json({ code: 'UNAVAILABLE' });
           return;
         }
+        if (action === 'render') {
+          if (!write) {
+            res.status(503).json({ code: 'UNAVAILABLE' });
+            return;
+          }
+          if (current.root.access !== 'readwrite') {
+            res.status(403).json({ code: 'PERMISSION_DENIED' });
+            return;
+          }
+          const parsed = localFilesInputSchema.safeParse(req.body);
+          if (!parsed.success || parsed.data.operation !== 'write') {
+            res.status(400).json({ code: 'INVALID_REQUEST' });
+            return;
+          }
+          if (!localFilesDocument(parsed.data.path) || parsed.data.encoding === 'base64') {
+            res.status(422).json({ code: 'UNSUPPORTED_FORMAT' });
+            return;
+          }
+          const controller = new AbortController();
+          const cancelled = () => controller.abort();
+          res.once('close', cancelled);
+          let result: LocalFilesResult;
+          try {
+            result = await write({
+              input: parsed.data,
+              config: settings,
+              signal: AbortSignal.any([
+                controller.signal,
+                AbortSignal.timeout(settings.extractionTimeoutMs),
+              ]),
+            });
+          } finally {
+            res.removeListener('close', cancelled);
+          }
+          if (!(await authorized(req))) {
+            res.status(404).json({ code: 'UNAVAILABLE' });
+            return;
+          }
+          if (!result.ok) {
+            const code = result.error.code;
+            let status = 422;
+            if (code === 'TOO_LARGE') status = 413;
+            else if (code === 'PROCESSOR_BUSY') status = 503;
+            else if (code === 'TIMEOUT') status = 504;
+            res.status(status).json({ code });
+            return;
+          }
+          res.json(result);
+          return;
+        }
         lease = await flows.acquireLease(`local-files-session:${current.id}`, {
           leaseMs: settings.sessionTtlMs,
           waitMs: settings.requestTimeoutMs,
@@ -363,6 +419,7 @@ export function createLocalFilesService({
       create: (req: Request, res: Response) => handle(req, res, 'create'),
       heartbeat: (req: Request, res: Response) => handle(req, res, 'heartbeat'),
       result: (req: Request, res: Response) => handle(req, res, 'result'),
+      render: (req: Request, res: Response) => handle(req, res, 'render'),
       remove: (req: Request, res: Response) => handle(req, res, 'remove'),
     };
   }
@@ -447,7 +504,7 @@ interface BindingOptions {
 }
 interface LocalFilesService {
   router: () => Record<
-    'create' | 'heartbeat' | 'result' | 'remove',
+    'create' | 'heartbeat' | 'result' | 'render' | 'remove',
     (req: Request, res: Response) => Promise<void>
   >;
   bind: (options: BindingOptions) => LocalFilesBinding | undefined;

@@ -10,6 +10,7 @@ import type { Request, Response } from 'express';
 import type { ServerRequest } from '~/types';
 import { createLocalFilesService, localFilesCapabilities } from './service';
 import { createLocalFilesReader } from './reader';
+import { createLocalFilesWriter } from './writer';
 import { samplePdf } from './samples.helper';
 
 const settings = localFilesConfigSchema.parse({ enabled: true, requestTimeoutMs: 10000 });
@@ -52,15 +53,64 @@ function request(
     get: (header: string) => (header === LOCAL_FILES_HEADER ? session?.token : undefined),
   }) as Request;
 }
-async function setup(read?: ReturnType<typeof createLocalFilesReader>) {
+async function setup(
+  read?: ReturnType<typeof createLocalFilesReader>,
+  write?: ReturnType<typeof createLocalFilesWriter>,
+) {
   const store = new Keyv();
-  const service = createLocalFilesService({ store, read });
+  const service = createLocalFilesService({ store, read, write });
   const handlers = service.router();
   const created = response();
-  await handlers.create(request(undefined, { version: 2, conversationId, root }), created.res);
+  await handlers.create(request(undefined, { version: 3, conversationId, root }), created.res);
   expect(created.state.status).toBe(201);
   return { store, service, handlers, session: created.state.body as LocalFilesSession };
 }
+it('renders documents only for the authenticated owner of a writable folder and returns safe failures', async () => {
+  const write = createLocalFilesWriter(
+    path.join(__dirname, '../../dist/filesystem/writer-worker.cjs'),
+  );
+  const { handlers, session } = await setup(undefined, write);
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    Object.assign(req, { user: principal, config });
+    next();
+  });
+  app.post('/sessions/:id/render', handlers.render);
+  const url = `/sessions/${session.id}/render`;
+  const input = { operation: 'write', path: 'report.pdf', content: 'Rendered PDF' };
+  await supertest(app).post(url).set(LOCAL_FILES_HEADER, 'wrong-token').send(input).expect(404);
+  const rendered = await supertest(app)
+    .post(url)
+    .set(LOCAL_FILES_HEADER, session.token)
+    .send(input)
+    .expect(200);
+  expect(Buffer.from(rendered.body.value.binary.data, 'base64').subarray(0, 4).toString()).toBe(
+    '%PDF',
+  );
+  await supertest(app)
+    .post(url)
+    .set(LOCAL_FILES_HEADER, session.token)
+    .send({ operation: 'read', path: 'report.pdf' })
+    .expect(400);
+  const invalid = await supertest(app)
+    .post(url)
+    .set(LOCAL_FILES_HEADER, session.token)
+    .send({ ...input, path: 'private.xlsx', content: '{"private":"password-secret"}' })
+    .expect(422);
+  expect(invalid.body).toEqual({ code: 'INVALID_REQUEST' });
+  const created = response();
+  await handlers.create(
+    request(undefined, { version: 3, conversationId, root: { ...root, access: 'read' } }),
+    created.res,
+  );
+  const readonly = created.state.body as LocalFilesSession;
+  await supertest(app)
+    .post(`/sessions/${readonly.id}/render`)
+    .set(LOCAL_FILES_HEADER, readonly.token)
+    .send(input)
+    .expect(403);
+}, 30000);
 it('authenticates raw uploads, extracts only a pending read, and keeps source bytes out of flow state', async () => {
   const read = createLocalFilesReader(
     path.join(__dirname, '../../dist/filesystem/reader-worker.cjs'),
