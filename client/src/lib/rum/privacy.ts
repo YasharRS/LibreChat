@@ -16,7 +16,7 @@ type SpanAttributes = Parameters<
 const AUTH_ROUTE = /\/(?:login|register|forgot-password|reset-password|verify|oauth)(?:\/|$)/i;
 const URL_ATTRIBUTE =
   /^(?:data-)?(?:href|src|url|uri|action|formaction|poster|cite|background|data|xlink:href)$/i;
-const URL_SPAN_ATTRIBUTE = /url|uri|href|referr?er|^http\.target$|location/i;
+const URL_SPAN_ATTRIBUTE = /url|uri|href|referr?er|^http\.target$|location|src$|srcset$|poster$/i;
 const HEADER_SPAN_ATTRIBUTE = /^http\.(?:request|response)\.header\.(.+)$/i;
 const CREDENTIAL_HEADER = /authorization|cookie|apikey|token|signature/i;
 const BODY_SPAN_ATTRIBUTE = /^http\.(?:request|response)\.body$/i;
@@ -91,7 +91,8 @@ export function sanitizeUrlReferences(value: string): string {
       /url\(\s*(['"]?)(.*?)\1\s*\)/gi,
       (_match, quote: string, url: string) => `url(${quote}${sanitizeTelemetryUrl(url)}${quote})`,
     )
-    .replace(/https?:\/\/[^\s"'<>)]*/gi, (url) => sanitizeTelemetryUrl(url));
+    .replace(/https?:\/\/[^\s"'<>)]*/gi, (url) => sanitizeTelemetryUrl(url))
+    .replace(/\b(?:data|javascript):[^\s"'<>)]*/gi, '[redacted]');
 }
 
 function sanitizeAttributes(

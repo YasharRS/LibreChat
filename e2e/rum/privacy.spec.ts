@@ -376,6 +376,9 @@ for (const mode of ['proxy', 'direct'] as const) {
       document
         .getElementById('relative-link')
         ?.setAttribute('href', `/changed?tempToken=${value}#${value}`);
+      const preview = document.createElement('img');
+      preview.src = `data:image/png;base64,${value}`;
+      document.body.appendChild(preview);
       window.RumPrivacyHarness.default.addAction('allowed-page-privacy-marker');
     }, secret);
     await expect.poll(() => replays.length, { timeout: 20_000 }).toBeGreaterThan(0);

@@ -4,18 +4,23 @@ import { PrivacyTraceExporter } from './exporter';
 
 it('sanitizes the actual span export boundary, including events, resources and links, without changing the source span', () => {
   const secret = 'fake-login-token-do-not-export';
+  const image = `data:image/png;base64,${secret}`;
   const url = `https://user:${secret}@app.example/login/2fa?tempToken=${secret}#${secret}`;
   const context = { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), traceFlags: 1 };
   const span: ReadableSpan = {
-    name: `GET ${url}`,
+    name: `GET ${url} ${image}`,
     kind: 0,
     spanContext: () => context,
     startTime: [1, 0],
     endTime: [2, 0],
     duration: [1, 0],
     ended: true,
-    status: { code: 2, message: `failed ${url}` },
-    attributes: { 'location.href': url, 'http.request.header.authorization': [`Bearer ${secret}`] },
+    status: { code: 2, message: `failed ${url} ${image}` },
+    attributes: {
+      'location.href': url,
+      'http.request.header.authorization': [`Bearer ${secret}`],
+      target_src: image,
+    },
     resource: resourceFromAttributes({
       'service.name': 'librechat-web',
       'page.url': url,
@@ -28,6 +33,7 @@ it('sanitizes the actual span export boundary, including events, resources and l
         time: [2, 0],
         attributes: {
           'exception.stacktrace': `at ${url}`,
+          'exception.message': `Image failed: ${image}`,
           'http.request.header.x_api_key': secret,
         },
       },
@@ -59,6 +65,8 @@ it('sanitizes the actual span export boundary, including events, resources and l
   expect(span.links[0].attributes?.['http.response.header.x_access_token']).toEqual([secret]);
   expect(safe.spanContext()).toEqual(context);
   expect(safe.attributes['location.href']).toBe('https://app.example/login/2fa');
+  expect(safe.attributes.target_src).toBe('[redacted]');
+  expect(span.attributes.target_src).toBe(image);
   expect(safe.resource.attributes['service.name']).toBe('librechat-web');
   expect(span.attributes['location.href']).toBe(url);
 });

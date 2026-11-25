@@ -1,5 +1,6 @@
 import {
   sanitizeTelemetryUrl,
+  sanitizeUrlReferences,
   sanitizeSpanAttributes,
   sanitizeReplayEvent,
   isReplayRouteAllowed,
@@ -40,6 +41,20 @@ it('strips credentials, query strings and fragments without changing useful URL 
   );
   expect(sanitizeTelemetryUrl(`javascript:${secret}`)).toBe('[redacted]');
   expect(sanitizeTelemetryUrl(`data:text/html,${secret}`)).toBe('[redacted]');
+});
+it('removes local image data from browser error metadata while retaining ordinary chat bodies', () => {
+  const image = `data:image/png;base64,${secret}`;
+  const attributes = sanitizeSpanAttributes({
+    target_src: image,
+    'exception.message': `Image failed: ${image}`,
+    'http.request.body': '{"text":"ordinary chat"}',
+  });
+  expect(attributes).toEqual({
+    target_src: '[redacted]',
+    'exception.message': 'Image failed: [redacted]',
+    'http.request.body': '{"text":"ordinary chat"}',
+  });
+  expect(sanitizeUrlReferences(`Image failed: ${image}`)).toBe('Image failed: [redacted]');
 });
 
 it('sanitizes recorder metadata before it can enter the SDK queue', () => {
